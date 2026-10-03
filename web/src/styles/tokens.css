@@ -1,0 +1,71 @@
+/* Safelight tokens, copied from oneiron-web src/styles/safelight.css and the day-ops ruling
+   (dark = the darkroom negative, light = day ops: white wells and slate ink over the day sky).
+   The theme follows the system; html.light / html.dark force one (used by ?theme=). */
+
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/fonts/source-serif-4-normal-400-600-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: italic;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/fonts/source-serif-4-italic-400-600-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Server Mono";
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/ServerMono-Regular.woff2") format("woff2");
+}
+
+:root {
+  color-scheme: light dark;
+  --bg:      light-dark(#F4F5F7, #131110);
+  --island:  light-dark(rgba(250, 249, 245, 0.965), rgba(27, 24, 21, 0.95));
+  --solid:   light-dark(#FAF9F5, #1B1815);
+  --sunk:    light-dark(#EEF0EF, #161412);
+  --tint:    light-dark(#E4E7E7, #25211C);
+  --ink-1:   light-dark(#1E2226, #DDD6C9);
+  --ink-2:   light-dark(#3A424B, #C0B9AC);
+  --ink-3:   light-dark(#5C6771, #8F887A);
+  --ink-4:   light-dark(#8A929B, #565048);
+  --rule:    light-dark(#DCE1E5, #322D27);
+  --safelight: light-dark(#C13A20, #E0452B);
+  --outside: light-dark(#4F7F78, #95BAB4);
+
+  /* family groups: three validated hues (dataviz validator, all-pairs, both modes) + two neutrals */
+  --g-anthropic: light-dark(#B07D10, #C98500);
+  --g-openai:    light-dark(#2A78D6, #3987E5);
+  --g-google:    light-dark(#138A60, #199E70);
+  --g-other:     var(--ink-3);
+  --g-human:     var(--outside);
+
+  --on-field: light-dark(#FFFDF8, #DDD6C9);
+  --on-field-2: light-dark(#F4F6F8, #C0B9AC);
+  --field-shadow: light-dark(0 1px 3px rgba(10, 38, 62, 0.55), 0 0 8px #131110);
+  --pop-shadow: 0 14px 40px light-dark(rgba(30, 40, 52, 0.22), rgba(0, 0, 0, 0.55));
+
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --mono: "Server Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --s-place: 21px;
+  --s-section: 16.5px;
+  --s-read: 15px;
+  --s-do: 14px;
+  --s-fig: 12.5px;
+  --s-badge: 11px;
+  --well-r: 6px;
+
+  --field: url("/art/field-day.png");
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6'%3E%3Crect width='1.5' height='1.5' fill='%231E2226' fill-opacity='.05'/%3E%3Crect x='3' y='3' width='1.5' height='1.5' fill='%231E2226' fill-opacity='.03'/%3E%3C/svg%3E");
+}
+html.light { color-scheme: light; }
+html.dark { color-scheme: dark; --field: url("/art/field-night.png"); --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6'%3E%3Crect width='1.5' height='1.5' fill='%23DDD6C9' fill-opacity='.035'/%3E%3Crect x='3' y='3' width='1.5' height='1.5' fill='%23DDD6C9' fill-opacity='.02'/%3E%3C/svg%3E"); }
+@media (prefers-color-scheme: dark) {
+  html:not(.light) { --field: url("/art/field-night.png"); --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6'%3E%3Crect width='1.5' height='1.5' fill='%23DDD6C9' fill-opacity='.035'/%3E%3Crect x='3' y='3' width='1.5' height='1.5' fill='%23DDD6C9' fill-opacity='.02'/%3E%3C/svg%3E"); }
+}

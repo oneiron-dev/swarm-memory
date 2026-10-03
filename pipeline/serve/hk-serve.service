@@ -1,0 +1,14 @@
+[Unit]
+Description=Swarm hackathon server: web-dist and bundle/data on 127.0.0.1:8790 (behind Tailscale Funnel)
+After=network-online.target
+
+[Service]
+ExecStart=/home/lexi/calc-nvme/hackathon-20261004/venv-bundle/bin/python /home/lexi/calc-nvme/wt/swarm-serve/pipeline/serve/serve.py --host 127.0.0.1 --port 8790 --data /home/lexi/calc-nvme/hackathon-20261004/bundle/data --dist /home/lexi/calc-nvme/hackathon-20261004/web-dist
+WorkingDirectory=/home/lexi/calc-nvme/hackathon-20261004
+Restart=always
+RestartSec=2
+Nice=10
+MemoryMax=1G
+
+[Install]
+WantedBy=default.target

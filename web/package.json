@@ -1,0 +1,22 @@
+{
+  "name": "swarm-memory-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:sample": "vite --mode sample",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "bun test",
+    "deploy": "sh deploy.sh"
+  },
+  "dependencies": {
+    "preact": "10"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "typescript": "^7.0.2",
+    "vite": "6"
+  }
+}

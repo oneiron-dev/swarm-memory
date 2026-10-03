@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.DS_Store
+data/bundle.json
+data/*.jsonl
+*.log
+data/*
+!data/.keep
+__pycache__/
+*.pyc

@@ -1,0 +1,4 @@
+# optional: faster JSON; build_bundle.py falls back to the stdlib json module without it
+orjson==3.12.0
+# required: English word frequencies decide which one-word human names match in any case
+wordfreq==3.1.1

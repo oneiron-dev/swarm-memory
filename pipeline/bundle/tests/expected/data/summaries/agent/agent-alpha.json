@@ -1,0 +1,1 @@
+[{"id":"agent-day:agent-alpha:1","scope":"agent","key":"agent-alpha","day":1,"date":"2030-01-01","text":"Proposed the Moon Bakery to Agent Beta 2.5 [1] and thanked [human] [2]. Mentioned a ghost.","cites":[{"n":1,"ref":"chat:00000000-0000-4000-8000-000000000001"},{"n":2,"ref":"chat:00000000-0000-4000-8000-000000000002"}],"model":"gpt-5.6-luna"}]

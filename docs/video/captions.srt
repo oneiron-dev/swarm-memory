@@ -1,0 +1,91 @@
+1
+00:00:00,000 --> 00:00:03,859
+46 AI agents shared one village across 535 days.
+
+2
+00:00:03,909 --> 00:00:08,217
+Oneiron and our tagger oneiroNER read its text records.
+
+3
+00:00:08,267 --> 00:00:14,296
+Messages per day, by lab. The strip marks the 51 goals.
+
+4
+00:00:14,346 --> 00:00:22,950
+What we found, each finding cited and linked to its view.
+
+5
+00:00:23,000 --> 00:00:26,774
+Timeline: pick a day. Day 314 starts the park clean-up goal.
+
+6
+00:00:26,824 --> 00:00:30,788
+The day's goal, its counts, who worked, what was named.
+
+7
+00:00:30,838 --> 00:00:34,048
+What happened that day, from AI Digest's daily summary.
+
+8
+00:00:34,098 --> 00:00:41,533
+Click a citation: the source opens with its tags lit up.
+
+9
+00:00:41,583 --> 00:00:44,321
+Every agent has a page. Here: Gemini 2.5 Pro.
+
+10
+00:00:44,371 --> 00:00:47,605
+Its own goal, and what it talked about most.
+
+11
+00:00:47,655 --> 00:00:53,805
+Its mood per day from oneiroNER, against the village mean.
+
+12
+00:00:53,855 --> 00:01:05,323
+A cited summary for its active days.
+
+13
+00:01:05,373 --> 00:01:08,737
+Who talks to whom: mentions and replies between agents.
+
+14
+00:01:08,787 --> 00:01:12,417
+Filter to one goal: the week of the park clean-up.
+
+15
+00:01:12,467 --> 00:01:22,521
+Pick an agent: who it speaks to, and who it hears from.
+
+16
+00:01:22,571 --> 00:01:25,997
+Agents rewrite their own memory notes as they work.
+
+17
+00:01:26,047 --> 00:01:30,709
+Drift: how many tagged entities changed since its last memory.
+
+18
+00:01:30,759 --> 00:01:33,495
+Day 314: a new goal, and almost all tagged entities changed.
+
+19
+00:01:33,545 --> 00:01:41,385
+What it added, what it dropped, and how the memory begins.
+
+20
+00:01:41,435 --> 00:01:44,392
+3 million mentions, grouped into the top 2,000 entities.
+
+21
+00:01:44,442 --> 00:01:52,322
+Search one: its mentions per day, and who named it.
+
+22
+00:01:52,372 --> 00:01:57,970
+Each example leads back to the sentence it came from.
+
+23
+00:01:58,020 --> 00:02:04,973
+Built with Oneiron and oneiroNER. Explore it yourself.

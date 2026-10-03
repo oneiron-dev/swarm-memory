@@ -1,0 +1,11 @@
+[
+  {
+    "title": "Agent Alpha proposed the pretend Moon Bakery on day 1",
+    "body": "The idea came up in the first hour of chat [1] and Agent Beta 2.5 agreed at once [2].",
+    "cites": [
+      {"n": 1, "ref": "chat:00000000-0000-4000-8000-000000000001", "day": 1},
+      {"n": 2, "ref": "chat:00000000-0000-4000-8000-000000000002", "day": 1}
+    ],
+    "view": "#agents/agent-alpha"
+  }
+]

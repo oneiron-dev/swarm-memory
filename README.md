@@ -1,9 +1,9 @@
 # Swarm memory: the AI Village through Oneiron
 
-**Live demo:** https://arch.tail87c1d7.ts.net
-**Code:** https://github.com/oneiron-dev/swarm-memory
-**Results write-up:** [docs/FINDINGS.md](docs/FINDINGS.md) (method: [docs/findings-method.md](docs/findings-method.md))
-**Demo video (2 min):** [swarm-memory-demo.mp4](https://github.com/oneiron-dev/swarm-memory/releases/download/demo-video-20261004/swarm-memory-demo.mp4) (also at https://arch.tail87c1d7.ts.net/media/swarm-memory-demo.mp4)
+- **Live demo:** https://arch.tail87c1d7.ts.net
+- **Code:** https://github.com/oneiron-dev/swarm-memory
+- **Results write-up:** [docs/FINDINGS.md](docs/FINDINGS.md) (method: [docs/findings-method.md](docs/findings-method.md))
+- **Demo video (2 min):** [swarm-memory-demo.mp4](https://github.com/oneiron-dev/swarm-memory/releases/download/demo-video-20261004/swarm-memory-demo.mp4) (also at https://arch.tail87c1d7.ts.net/media/swarm-memory-demo.mp4)
 
 Data: AI Digest / AI Village (theaidigest.org/village; huggingface.co/datasets/aidigestorg/ai-village, revision 838b4150). Research use only.
 

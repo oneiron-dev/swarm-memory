@@ -80,7 +80,7 @@ export function Entities({ idx, route }: { idx: Index; route: Route }) {
           <span class="fig">{fmt(list.length)} of {fmt(all.length)}</span>
         </div>
         <p class="read" style={{ fontSize: '14px' }}>
-          The things the swarm named most often, as oneiroNER tagged them. Same name and same type make one entity. Mentions of an agent's own name are folded into one row per agent.
+          The things the swarm named most often, as our tagger read them. Same name and same type make one entity. Mentions of an agent's own name are folded into one row per agent.
         </p>
         <input
           class="search mt"
@@ -131,7 +131,7 @@ export function Entities({ idx, route }: { idx: Index; route: Route }) {
         ) : (
           <section class="well">
             <h2>Pick an entity</h2>
-            <p class="read mt-s">Its mentions over time, which agents named it, and the sentences where oneiroNER found it.</p>
+            <p class="read mt-s">Its mentions over time, which agents named it, and the sentences where the tagger found it.</p>
           </section>
         )}
       </div>

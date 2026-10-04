@@ -102,6 +102,9 @@ data/
   entities/<slug>.json             on demand: one entity's agents and timeline (slug = id without "e:")
   memory/<agent>.json              on demand: memory drift for one agent
   sources/<day>.json               on demand: cited snippets for one day
+  book.json                        loaded when the book opens (under 1 MB)
+  adherence/<agent>.json           on demand
+  talk/<agent>.json                on demand
 ```
 
 `bundle.json` top level:
@@ -116,7 +119,7 @@ Each key below is one part of `bundle.json`, except where a heading names an on-
 
 ### manifest
 ```json
-{"schema":"swarm-bundle/1","generated":"2026-10-04T12:00:00Z","dataset":"aidigestorg/ai-village@838b4150",
+{"schema":"swarm-bundle/1.3","generated":"2026-10-04T12:00:00Z","dataset":"aidigestorg/ai-village@838b4150",
  "cite":"Data: AI Digest / AI Village (theaidigest.org/village)",
  "range":{"first_day":1,"last_day":535,"first_date":"2025-04-02","last_date":"2026-09-20"},
  "counts":{"agents":46,"rooms":16,"slice_rows":0,"slice_tokens":0,"mentions":0,"entities":0,"summaries":0},
@@ -189,6 +192,34 @@ Only rows that a summary or entity cites. Text is cut at 600 characters. Never t
   "added":["e:…"],"dropped":["e:…"],"jaccard_prev":0.81,"excerpt":"first 400 characters…"}]}
 ```
 `jaccard_prev` = entity-set overlap with the previous kept memory. Drift = 1 − `jaccard_prev`.
+
+### the book (schema v1.3)
+```
+data/book.json                 loaded when the book opens (under 1 MB)
+data/adherence/<agent>.json    on demand
+data/talk/<agent>.json         on demand
+```
+`book.json`:
+```json
+{"schema":"swarm-book/1.1","generated":"…","model":"gpt-5.6-luna",
+ "chapters":[{"n":1,"goal":"…","title":"…","first_day":1,"last_day":9,"first_date":"2025-04-02","last_date":"2025-04-10",
+   "days":[1,2,3],"agents":["claude-3-7-sonnet"],
+   "stats":{"days":9,"chat":0,"sessions":0,"memories":0,"human_chat":0,"agents":0},
+   "text":"… [1] … [2]","cites":[{"n":1,"ref":"chat:…","day":3}],
+   "hook":"…","beats":[{"text":"… [1][2].","cites":[1,2]}],"figure":{"value":"$2,731","label":"…","cites":[2]}}],
+ "days":[{"day":1,"date":"2025-04-02","chapter":1,"text":"… [1]","cites":[{"n":1,"ref":"chat:…","day":1}]}]}
+```
+`adherence/<agent>.json`: `{"agent":"gpt-5-5","days":[{"day":467,"chapter":40,"score":"on","note":"…"}]}` (score may be null).
+`talk/<agent>.json`: `{"agent":"gpt-5-5","days":[{"day":467,"partners":[["o3",12],["human",3]]}]}`.
+Every `text` and `note` passes the same redaction and validator rules as summaries (names list, extra ids, handles, URLs, the `[human]` rules); entity ids are not used here. The validator must also check that every cite's `ref` exists in `sources/<day>.json` and that every `[n]` in a text has a cite.
+
+Chapter scroll fields (swarm-book/1.1, all three optional: absent or null means the page falls back to the title, the paragraph's sentences and no figure). Written by `gpt-5.6-luna` from the chapter paragraph (pipeline/book `hooks`) and checked by the validator beside the served `text` and `cites`:
+- `hook`: one line of 6 to 14 words, no square brackets (no `[n]`, no chip), not a question; every number in it is a number `text` states.
+- `beats`: 3 to 6 objects `{"text","cites"}` that retell `text` in order. Each `text` has at most 24 words before its markers and ends with them (`… [3][4].`); every `[n]` is a number of the chapter's `cites`; `cites` lists exactly the markers of `text`, each once, in order of first use; no other square brackets. The day a beat is about is the `day` of its cites.
+- `figure`: `{"value","label","cites"}` or null. `value` is at most 8 characters, contains a digit, and every number in it is a number `text` states in digits ("$2,731", "32", "11 days", "7 of 9"); `label` is 1 to 7 words with no closing full stop; `cites` is non-empty and every number is in the chapter's `cites`.
+These strings pass the same redaction and validator rules as `text` (names list, extra ids, handles, URLs, untagged common-word names). A field that a redaction would break is served as null.
+
+One chapter per village goal: a day joins the chapter whose `goal` equals its `village_goal`; a day without one joins the chapter of the day before it. Every day of `days[]` is in `book.json` `days` and in exactly one chapter. `title` and `text` are null when no text is written yet. `score` is `on` (most of the day's work served the goal), `partly`, `off` (it worked on something else) or `idle` (stuck, looping, errors). `partners` are the top 5 by interaction weight that day, both directions summed.
 
 ### views.mood (only when the mood head ran)
 `{"days":[467],"agents":{"gpt-5-5":{"v":[0.4],"a":[0.5],"d":[0.6]}}}`: daily means of turn mood.

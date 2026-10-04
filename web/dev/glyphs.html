@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Glyphs · harness</title>
+  <style>
+    html { color-scheme: light; background: #f3eee4; }
+    body { margin: 0; }
+    .book {
+      --paper: #f6f1e7; --ink: #1f1d1a; --ink-2: #3a362f; --ink-3: #78715f; --ink-4: #a89f90;
+      --rule: rgba(31, 29, 26, 0.14); --hair: rgba(31, 29, 26, 0.08); --accent: #b7482a;
+      color: var(--ink-2); font-family: var(--serif); padding: 28px clamp(16px, 3vw, 40px) 60px;
+    }
+    .book h1 { font-size: 30px; font-weight: 400; color: var(--ink); margin: 0 0 6px; }
+    .book h2 { font-size: 15px; font-weight: 400; color: var(--ink-3); margin: 36px 0 12px; }
+    .book p.note { font-size: 14px; color: var(--ink-3); margin: 0 0 14px; }
+    .grid { display: flex; flex-wrap: wrap; gap: 18px 28px; align-items: flex-end; }
+    .cell { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .cell .k { font-size: 14px; color: var(--ink-3); }
+    .ink3 { color: var(--ink-3); }
+    .ink { color: var(--ink); }
+    .stack { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+    .paper { background: var(--paper); padding: 16px 18px; }
+    .painting { background: #d9d2c2 url("/plates/wash/v-hi_a-lo.webp") center 40% / cover no-repeat; padding: 16px 18px; }
+    /* the text column in the book sits on a paper wash over the painting; figures live there */
+    .painting.b { background-image: linear-gradient(rgba(246, 241, 231, 0.8), rgba(246, 241, 231, 0.8)), url("/plates/wash/v-lo_a-hi.webp"); }
+    .figs { display: flex; flex-wrap: wrap; gap: 28px 48px; align-items: flex-start; }
+    .strips { display: flex; flex-wrap: wrap; gap: 24px 40px; align-items: flex-end; }
+    .zoom { transform: scale(3); transform-origin: left top; height: 72px; width: 140px; pointer-events: none; }
+    #zoom { height: 72px; overflow: hidden; align-items: flex-start; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="./glyphs.tsx"></script>
+</body>
+</html>

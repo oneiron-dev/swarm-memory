@@ -234,7 +234,7 @@ function MoodPanel({ idx, agent }: { idx: Index; agent: Agent }) {
         <Picks label="mood dimension" value={dim} options={DIMS} onPick={setDim} />
       </div>
       <p class="quiet" style={{ fontSize: '14px', marginBottom: '8px' }}>
-        Daily mean of oneiroNER's turn mood for {agent.id === 'human' ? 'humans' : agent.name}, against the village mean (thin line). Average {DIMS.find((d) => d.id === dim)!.name} <span class="fig">{mean1.toFixed(2)}</span>.
+        Daily mean of the tagger's turn mood for {agent.id === 'human' ? 'humans' : agent.name}, against the village mean (thin line). Average {DIMS.find((d) => d.id === dim)!.name} <span class="fig">{mean1.toFixed(2)}</span>.
       </p>
       <div class="chart" ref={ref}>
         <svg width={width} height={height} role="img" aria-label={`${dim} over days`} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>

@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plume · pigment study</title>
+  <style>
+    :root { color-scheme: light; font-family: "Avenir Next", Avenir, sans-serif; color: #263746; background: #e7edf1; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { display: flex; align-items: baseline; gap: 24px; padding: 24px 32px; }
+    h1 { margin: 0; font: 500 26px Georgia, serif; }
+    header p { margin: 0; font-size: 13px; color: #526574; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; padding: 0 24px 24px; align-items: start; }
+    .viewport { overflow: auto; }
+    .page { position: relative; min-height: 720px; height: calc(100dvh - 110px); background: #f8fafb; overflow: hidden; }
+    canvas { position: absolute; width: 100%; height: 100%; inset: 0; pointer-events: none; }
+    article { position: relative; padding: 80px 8% 140px; max-width: 720px; margin: auto; pointer-events: none; }
+    .caption { font: 12px ui-monospace, "SFMono-Regular", monospace; color: #526574; }
+    h2 { font: 400 clamp(38px, 4vw, 58px)/1.1 Georgia, serif; text-wrap: balance; margin: 40px 0 28px; }
+    article p:not(.caption) { font: 18px/1.8 Georgia, serif; text-wrap: pretty; }
+    aside { padding: 22px; background: #f8fafb; }
+    aside h2 { font: 500 17px "Avenir Next", sans-serif; margin: 0 0 24px; }
+    .control { display: grid; gap: 5px; margin-bottom: 18px; }
+    label { display: flex; justify-content: space-between; font-size: 13px; gap: 10px; }
+    output, .metric { font: 12px ui-monospace, "SFMono-Regular", monospace; font-variant-numeric: tabular-nums; }
+    input[type=range] { width: 100%; height: 28px; margin: 0; accent-color: #597b91; cursor: pointer; }
+    .swatches { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0 0 22px; }
+    .swatches label { display: grid; gap: 5px; }
+    input[type=text] { width: 100%; min-height: 36px; padding: 5px; border: 1px solid #a3b2bb; background: #f8fafb; color: inherit; font: 12px ui-monospace, monospace; }
+    button { min-height: 44px; padding: 9px 12px; background: #e7edf1; color: inherit; border: 0; font: inherit; font-size: 13px; cursor: pointer; }
+    button:active { background: #d6e1e8; }
+    :focus-visible { outline: 2px solid #263746; outline-offset: 3px; }
+    .actions { display: flex; gap: 8px; margin: 8px 0 20px; }
+    #benchmark { width: 100%; }
+    .metric { line-height: 1.7; white-space: pre-line; overflow-wrap: anywhere; margin: 12px 0; }
+    .note { font-size: 12px; line-height: 1.6; color: #526574; margin: 10px 0 0; }
+    #error { color: #912f31; }
+    @media (hover: hover) { button:hover { background: #d6e1e8; } }
+    @media (max-width: 760px) { header { padding: 20px; flex-wrap: wrap; gap: 8px; } main { grid-template-columns: 1fr; padding: 0 12px 12px; } article { padding-top: 48px; } .page { min-height: 650px; height: auto; } }
+  </style>
+</head>
+<body>
+  <header><h1>Plume</h1><p>A pigment study for the space behind a page.</p></header>
+  <main>
+    <div class="viewport">
+      <section class="page" id="page" aria-label="Reading preview">
+        <canvas id="plume" aria-hidden="true"></canvas>
+        <article>
+          <p class="caption">Pigment, air, and time</p>
+          <h2>What settles<br />stays.</h2>
+          <p>A page can hold more than its words. Here, small grains of colour move through the space behind the text. Some rise on a current. Others fall, coming to rest where the last ones landed.</p>
+          <p>Change the ink and the air takes on a new colour. The ground remembers the old one. In time, these small arrivals become layers: a record of what passed through.</p>
+          <p>The words belong to the page. The canvas draws only grains.</p>
+        </article>
+      </section>
+    </div>
+    <aside aria-label="Plume controls">
+      <h2>Pigment controls</h2>
+      <div class="control"><label for="grains">Live grains <output id="grains-out"></output></label><input id="grains" type="range" min="0" max="8000" step="100" /></div>
+      <div class="control"><label for="wind">Wind <output id="wind-out"></output></label><input id="wind" type="range" min="0" max="1" step="0.01" /></div>
+      <div class="control"><label for="settle">Settling share <output id="settle-out"></output></label><input id="settle" type="range" min="0" max="1" step="0.01" /></div>
+      <div class="control"><label for="source">Source <output id="source-out"></output></label><input id="source" type="range" min="0" max="2" step="1" /></div>
+      <div class="control"><label for="opacity">Opacity <output id="opacity-out"></output></label><input id="opacity" type="range" min="0" max="1" step="0.01" /></div>
+      <div class="control"><label for="seed">Seed <output id="seed-out"></output></label><input id="seed" type="range" min="0" max="10000" step="1" /></div>
+      <div class="control"><label for="palette">Palette size <output id="palette-out"></output></label><input id="palette" type="range" min="2" max="4" step="1" /></div>
+      <div class="swatches" id="swatches"></div>
+      <p class="note" id="error" role="status"></p>
+      <div class="actions"><button id="pause" type="button">Pause</button><button id="reset" type="button">Reset</button></div>
+      <button id="benchmark" type="button">Measure 6,000 grains</button>
+      <p class="metric" id="timing" aria-live="polite">Waiting for frames.</p>
+      <p class="note" id="motion"></p>
+      <p class="note">Changes ease over 1.5 seconds. Old layers keep their ink. Measurement uses a 1440 × 900 CSS-pixel canvas, with 60 warm-up frames and 240 measured frames. CPU time covers simulation and canvas calls, not GPU presentation. The target is under 4 ms at DPR 2 on Apple M1.</p>
+    </aside>
+  </main>
+  <script type="module">
+    import { createPlume, defaultState } from '/src/ground/plume.ts'
+
+    const canvas = document.querySelector('#plume')
+    const page = document.querySelector('#page')
+    const timing = document.querySelector('#timing')
+    const motion = matchMedia('(prefers-reduced-motion: reduce)')
+    const sources = ['left', 'bottom', 'band']
+    let state = defaultState()
+    let palette = [...state.palette, '#78906f']
+    let plume, paused = false, samples = [], warmup = 0, measuring = false, result = null
+    const nativeRAF = window.requestAnimationFrame
+    // This isolated page has only one RAF client: the plume controller. Time
+    // the actual callback, not frame intervals; no production telemetry API.
+    window.requestAnimationFrame = callback => nativeRAF.call(window, now => {
+      const start = performance.now()
+      callback(now)
+      const elapsed = performance.now() - start
+      if (!measuring) return
+      if (warmup > 0) { warmup--; return }
+      samples.push(elapsed)
+      if (samples.length === 240) {
+        measuring = false
+        const sorted = [...samples].sort((a, b) => a - b)
+        const rect = canvas.getBoundingClientRect()
+        result = { meanMs: samples.reduce((a, b) => a + b, 0) / samples.length,
+          p95Ms: sorted[Math.floor(sorted.length * 0.95)], samples: samples.length,
+          grains: state.grains, cssWidth: rect.width, cssHeight: rect.height,
+          dpr: devicePixelRatio, backingWidth: canvas.width, backingHeight: canvas.height }
+        timing.textContent = `${result.meanMs.toFixed(2)} ms mean · ${result.p95Ms.toFixed(2)} ms p95
+${result.samples} frames · DPR ${result.dpr}
+${result.cssWidth} × ${result.cssHeight} CSS px`
+        console.info('Plume frame CPU time', result)
+        document.querySelector('#benchmark').disabled = false
+      }
+    })
+
+    function cancelMeasure() {
+      measuring = false
+      document.querySelector('#benchmark').disabled = false
+    }
+    function sync() {
+      for (const key of ['grains', 'wind', 'settle', 'opacity', 'seed', 'source', 'palette']) {
+        const value = key === 'source' ? sources.indexOf(state.source) : key === 'palette' ? state.palette.length : state[key]
+        document.getElementById(key).value = value
+        document.getElementById(`${key}-out`).value = key === 'source' ? state.source : value
+      }
+      document.querySelector('#source').setAttribute('aria-valuetext', state.source)
+      document.querySelector('#swatches').replaceChildren(...state.palette.map((color, i) => {
+        const label = document.createElement('label')
+        label.textContent = `Ink ${i + 1}`
+        const input = document.createElement('input')
+        input.type = 'text'; input.value = color; input.setAttribute('aria-label', `Ink ${i + 1} CSS colour`)
+        input.addEventListener('change', () => {
+          if (!CSS.supports('color', input.value)) {
+            document.querySelector('#error').textContent = 'Enter a CSS colour, such as #597b91 or steelblue.'
+            input.setAttribute('aria-invalid', 'true'); return
+          }
+          document.querySelector('#error').textContent = ''; input.removeAttribute('aria-invalid')
+          palette[i] = input.value; state.palette = palette.slice(0, state.palette.length)
+          cancelMeasure(); plume.set({ palette: state.palette })
+        })
+        label.append(input); return label
+      }))
+    }
+    for (const key of ['grains', 'wind', 'settle', 'opacity', 'seed', 'source', 'palette']) {
+      document.getElementById(key).addEventListener('input', event => {
+        cancelMeasure()
+        const value = Number(event.target.value)
+        state[key] = key === 'source' ? sources[value] : key === 'palette' ? palette.slice(0, value) : value
+        // Seed changes commit on release; reduced-motion sliders likewise avoid
+        // rebuilding a 600-step still for every intermediate pointer position.
+        if (key !== 'seed' && !motion.matches) plume.set({ [key]: state[key] })
+        sync()
+      })
+      document.getElementById(key).addEventListener('change', () => {
+        if (key === 'seed' || motion.matches) plume.set({ [key]: state[key] })
+      })
+    }
+    function motionStatus() {
+      document.querySelector('#motion').textContent = motion.matches
+        ? 'Reduced motion: a single seeded frame after 600 simulation steps. No animation runs.'
+        : 'Animation pauses while the document is hidden.'
+      if (motion.matches) { cancelMeasure(); timing.textContent = 'Still frame. Enable motion to measure animated frames.' }
+    }
+    function reset() {
+      cancelMeasure(); plume?.destroy()
+      page.style.width = ''; page.style.height = ''
+      state = defaultState(); palette = [...state.palette, '#78906f']; paused = false
+      document.querySelector('#pause').textContent = 'Pause'
+      plume = createPlume(canvas, state); sync(); motionStatus()
+    }
+    function benchmark() {
+      if (motion.matches) { motionStatus(); return }
+      cancelMeasure(); plume.destroy()
+      page.style.width = '1440px'; page.style.height = '900px'
+      state = defaultState(); state.grains = 6000
+      palette = [...state.palette, '#78906f']
+      paused = false; document.querySelector('#pause').textContent = 'Pause'
+      plume = createPlume(canvas, state); sync()
+      samples = []; warmup = 60; measuring = true; result = null
+      timing.textContent = 'Measuring 240 frames after warm-up…'
+      document.querySelector('#benchmark').disabled = true
+    }
+    document.querySelector('#pause').addEventListener('click', () => {
+      cancelMeasure(); paused = !paused
+      if (paused) plume.pause(); else plume.resume()
+      document.querySelector('#pause').textContent = paused ? 'Resume' : 'Pause'
+    })
+    document.querySelector('#reset').addEventListener('click', reset)
+    document.querySelector('#benchmark').addEventListener('click', benchmark)
+    motion.addEventListener('change', motionStatus)
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && measuring) { cancelMeasure(); timing.textContent = 'Measurement cancelled while hidden. Run it again in a visible tab.' }
+    })
+    window.addEventListener('pagehide', event => {
+      cancelMeasure()
+      if (event.persisted) plume.pause()
+      else {
+        plume.destroy(); window.requestAnimationFrame = nativeRAF
+        motion.removeEventListener('change', motionStatus)
+      }
+    })
+    window.addEventListener('pageshow', event => {
+      if (event.persisted && !paused) plume.resume()
+    })
+    window.plumeLab = { get plume() { return plume }, get state() { return state },
+      get result() { return result }, get measuring() { return measuring }, benchmark, reset }
+    reset()
+  </script>
+</body>
+</html>

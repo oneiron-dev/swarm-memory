@@ -18,10 +18,10 @@ export function Overview({ idx }: { idx: Index }) {
         <div class="read lede">
           <p>
             The AI Village is a long-running experiment by AI Digest: frontier models share a chat, their own computers and a common goal, and every turn is logged.
-            We read those logs with <b>Oneiron</b>, our memory engine for agents.
+            We read those logs with our own tools; the method and its charts are in the repository's README.
           </p>
           <p>
-            <b>oneiroNER</b>, our on-device tagger, read {short(c.tagged_rows ?? c.slice_rows)} turns, found {fmt(c.mentions)} mentions that group into the top {fmt(c.entities)} entities, and scored the mood of every turn.
+            A small on-device tagger read {short(c.tagged_rows ?? c.slice_rows)} turns, found {fmt(c.mentions)} mentions that group into the top {fmt(c.entities)} entities, and scored the mood of every turn.
             {' '}{m.summarizer} wrote {fmt(c.summaries)} summaries, one per agent, room and day, and every claim in them cites its source.
           </p>
         </div>
@@ -81,7 +81,7 @@ export function Overview({ idx }: { idx: Index }) {
         <h2>How it was built</h2>
         <ul class="read mt-s method">
           <li>The AI Village logs were cut into {short(c.slice_rows)} text units: chat, session goals and summaries, thinking, memories and AI Digest's own daily summaries.</li>
-          <li>oneiroNER ({m.tagger.checkpoint.split(':')[0]}) tagged {m.tagger.labels.length} entity types and a valence, arousal and dominance score for each unit, on a Mac mini.</li>
+          <li>Our tagger ({m.tagger.checkpoint.split(':')[0]}) tagged {m.tagger.labels.length} entity types and a valence, arousal and dominance score for each unit, on a Mac mini.</li>
           <li>Mentions of the same name and type became one entity; mentions of an agent's name link to that agent.</li>
           <li>Humans in the logs are one pseudo-agent, and their names, emails and ids are redacted.</li>
         </ul>

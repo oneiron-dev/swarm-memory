@@ -50,6 +50,124 @@ class FullBundle(unittest.TestCase):
         v = validate_bundle.validate(self.data, os.path.join(self.tmp, "meta"), common_words=os.path.join(self.tmp, "common_words.json"))
         self.assertEqual(v.errors, [])
 
+    def test_book(self):
+        book = load(self.data, "book.json")
+        self.assertEqual(book["schema"], "swarm-book/1.2")
+        self.assertEqual([c["days"] for c in book["chapters"]], [[1, 2], [3, 4]])
+        c1, c2 = book["chapters"]
+        self.assertEqual((c1["title"], c1["first_date"], c1["stats"]["days"]), ("A Week With [human]", "2030-01-01", 2))
+        self.assertEqual(c1["text"], "The agents planned a bakery [1] and ordered 2 ovens [2]. They asked [human] [1].")
+        self.assertEqual([c["day"] for c in c1["cites"]], [1, 2])
+        self.assertIsNone(c2["text"])  # its cached goal no longer matches: not shown
+        self.assertEqual([d["day"] for d in book["days"]], [d["day"] for d in self.b["days"]])
+        d1 = book["days"][0]
+        self.assertEqual(d1["chapter"], 1)
+        self.assertNotIn("Zed Quill", d1["text"])
+        self.assertIn("asked [human] for help", d1["text"])  # a common-word name: untagged rule
+        self.assertNotIn("[2]", d1["text"])  # its ref is not in the slice: cite and marker dropped
+        self.assertEqual(len(d1["cites"]), 1)
+        self.assertIsNone(book["days"][3]["text"])  # no paragraph cached
+        d3 = book["days"][2]  # a gap paragraph citing a raw row that no summary cites: the row is served
+        self.assertEqual(d3["text"], "Agent Alpha sent the recipe card [1].")
+        self.assertIn(d3["cites"][0]["ref"], load(self.data, "sources/3.json"))
+        alpha = load(self.data, "adherence/agent-alpha.json")
+        self.assertEqual(alpha["days"][0]["score"], "on")
+        self.assertEqual(alpha["days"][0]["note"], "Asked [human] and [human] for help.")
+        beta = load(self.data, "adherence/agent-beta-2-5.json")
+        self.assertEqual((beta["days"][0]["score"], beta["days"][0]["note"]), (None, None))
+
+    def test_book_with_days_only(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            make_fixtures.build(tmp)
+            for name in ("chapters", "adherence"):
+                os.remove(os.path.join(tmp, "book", f"{name}.jsonl"))
+            run(tmp)
+            data = os.path.join(tmp, "bundle", "data")
+            book = load(data, "book.json")
+            self.assertEqual([c["text"] for c in book["chapters"]], [None, None])
+            self.assertEqual(load(data, "adherence/agent-alpha.json")["days"][0]["score"], None)
+            v = validate_bundle.validate(data, os.path.join(tmp, "meta"), common_words=os.path.join(tmp, "common_words.json"))
+            self.assertEqual(v.errors, [])
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_book_scroll_fields(self):
+        c1, c2 = load(self.data, "book.json")["chapters"]
+        self.assertEqual(c1["hook"], "Two pretend days, 2 ovens, and a bakery planned on the moon")
+        self.assertEqual(c1["beats"], [{"text": "The agents planned a bakery [1].", "cites": [1]},
+                                       {"text": "They ordered 2 ovens [2].", "cites": [2]},
+                                       {"text": "They asked a neighbour for help [1].", "cites": [1]}])  # reworded
+        self.assertEqual(c1["figure"], {"value": "2", "label": "ovens ordered for the bakery", "cites": [2]})
+        self.assertEqual((c2["hook"], c2["beats"], c2["figure"]), (None, None, None))  # no chapter text served
+
+    def test_book_scroll_fields_that_fail_are_dropped(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            make_fixtures.build(tmp)
+            path = os.path.join(tmp, "book", "hooks.jsonl")
+            with open(path) as f:
+                rows = [json.loads(line) for line in f]
+            rows[1]["hook"] = "The agents asked Will for help with 2 ovens"  # the redaction adds a chip
+            rows[1]["beats"] = rows[1]["beats"][:2]  # too few beats
+            rows[1]["figure"]["value"] = "3"  # not a number the text states
+            with open(path, "w") as f:
+                f.write("".join(json.dumps(r) + "\n" for r in rows))
+            run(tmp)
+            data = os.path.join(tmp, "bundle", "data")
+            c1 = load(data, "book.json")["chapters"][0]
+            self.assertEqual((c1["hook"], c1["beats"], c1["figure"]), (None, None, None))
+            v = validate_bundle.validate(data, os.path.join(tmp, "meta"), common_words=os.path.join(tmp, "common_words.json"))
+            self.assertEqual(v.errors, [])
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_book_stage(self):
+        c1, c2 = load(self.data, "book.json")["chapters"]
+        self.assertEqual(c1["stage"], {  # the line made from these beats; a label the redaction would change is null
+            "props": [{"kind": "stall", "label": "moon bakery"}, {"kind": "mailbox", "label": None}],
+            "moments": [{"beat": 1, "kind": "build", "agents": ["agent-beta-2-5"], "label": "2 ovens"},
+                        {"beat": 0, "kind": "gather", "agents": [], "label": None}]})
+        self.assertIsNone(c2["stage"])  # no chapter text served
+        with open(os.path.join(self.tmp, "bundle", "BUILD.json")) as f:
+            counts = json.load(f)["counts"]["book"]
+        self.assertEqual((counts["stage"], counts["stage_moments"], counts["stage_labels_dropped"]), (1, 2, 1))
+
+    def test_book_stage_that_fails_is_dropped(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            make_fixtures.build(tmp)
+            path = os.path.join(tmp, "book", "stage.jsonl")
+            with open(path) as f:
+                rows = [json.loads(line) for line in f]
+            rows[1]["stage"]["moments"][0]["agents"] = ["o9"]  # an agent of another chapter
+            with open(path, "w") as f:
+                f.write("".join(json.dumps(r) + "\n" for r in rows))
+            run(tmp)
+            data = os.path.join(tmp, "bundle", "data")
+            self.assertIsNone(load(data, "book.json")["chapters"][0]["stage"])
+            v = validate_bundle.validate(data, os.path.join(tmp, "meta"), common_words=os.path.join(tmp, "common_words.json"))
+            self.assertEqual(v.errors, [])
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_book_rewrites(self):
+        book = load(self.data, "book.json")
+        self.assertEqual(book["days"][1]["text"], "Agent Beta 2.5 got the oven [1].")
+        self.assertTrue(book["days"][0]["text"].startswith("Agent Alpha planned"))  # a rewrite of another text
+
+    def test_talk_partners(self):
+        edges = self.b["views"]["interactions"]["edges"]
+        for e in edges:
+            for side, other in ((e["from"], e["to"]), (e["to"], e["from"])):
+                talk = load(self.data, f"talk/{side}.json")
+                for d, n in e["by_day"]:
+                    row = next(r for r in talk["days"] if r["day"] == d)
+                    weights = [w for _, w in row["partners"]]
+                    self.assertEqual(weights, sorted(weights, reverse=True))
+                    self.assertLessEqual(len(row["partners"]), 5)
+                    self.assertTrue(any(p == other for p, _ in row["partners"]) or len(row["partners"]) == 5)
+
     def test_entities_group_on_folded_text(self):
         ent = {e["id"]: e for e in self.b["entities"]}
         mb = ent["e:moon-bakery"]
@@ -256,6 +374,77 @@ class FullBundle(unittest.TestCase):
         self.assertEqual(self.b["days"][2]["village_goal"], "Write a fake almanac")
 
 
+class Pairs(unittest.TestCase):
+    def test_day_pairs_as_the_page_picks_them(self):
+        edges = [{"from": "agent-alpha", "to": "agent-beta", "w": 9, "by_day": [[1, 4], [2, 1]]},
+                 {"from": "agent-beta", "to": "agent-alpha", "w": 5, "by_day": [[1, 2]]},
+                 {"from": "human", "to": "agent-gamma", "w": 4, "by_day": [[1, 3], [2, 1]]},
+                 {"from": "agent-delta", "to": "agent-gamma", "w": 3, "by_day": [[1, 3]]},
+                 {"from": "agent-gamma", "to": "agent-gamma", "w": 9, "by_day": [[1, 9]]},
+                 {"from": "agent-delta", "to": "human", "w": 1, "by_day": [[1, 1]]}]
+        top = build_bundle.day_pairs(edges)
+        # both directions fold; a tie keeps the order of first sight in the served edges; a self edge never counts
+        self.assertEqual(top[1], [("agent-alpha", "agent-beta", 6), ("agent-gamma", "human", 3),
+                                  ("agent-delta", "agent-gamma", 3)])
+        self.assertEqual(top[2], [("agent-alpha", "agent-beta", 1), ("agent-gamma", "human", 1)])
+
+    def test_pair_problem(self):
+        ok = "Agent Alpha and the humans fixed the pretend oven before the bake sale."
+        self.assertIsNone(build_bundle.pair_problem(ok))
+        for bad in ("Too short to say much.", ok[:-1], ok.replace("fixed", "fixed [human]"),
+                    ok.replace("the pretend oven", '"the pretend oven"'), ok.replace(" before", " — before"),
+                    ok[:-1] + "?", " ".join([ok] * 2), None):
+            self.assertIsNotNone(build_bundle.pair_problem(bad), bad)
+
+    def test_pairs_json(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            make_fixtures.build(tmp)
+            run(tmp)
+            data = os.path.join(tmp, "bundle", "data")
+            top = build_bundle.day_pairs(load(data, "bundle.json")["views"]["interactions"]["edges"])
+            self.assertTrue(top)
+            chat = {}
+            with open(os.path.join(tmp, "slice", "slice-chat.jsonl")) as f:
+                for line in f:
+                    r = json.loads(line)
+                    chat.setdefault(r["day"], r["id"])
+            recs, keys = [], [(d, a, b) for d, ps in sorted(top.items()) for a, b, _ in ps]
+            for i, (d, a, b) in enumerate(keys):
+                text = ("Agent Alpha and the pair talked about the pretend oven and its warm bread."
+                        if i else "The pair asked Will about the pretend oven and its warm bread.")  # a chip lands
+                recs.append({"day": d, "a": b, "b": a, "text": text, "cites": [chat[d]], "prompt": "pairs-v1"})
+            recs.append({"day": keys[-1][0], "a": keys[-1][1], "b": keys[-1][2], "text": None, "cites": [],
+                         "why": "a later null keeps the earlier text", "prompt": "pairs-v1"})
+            with open(os.path.join(tmp, "book", "pairs.jsonl"), "w") as f:
+                f.write("".join(json.dumps(r) + "\n" for r in recs))
+            run(tmp)
+            data = os.path.join(tmp, "bundle", "data")
+            b, p = load(data, "bundle.json"), load(data, "pairs.json")
+            self.assertEqual(p["schema"], "swarm-pairs/1")
+            self.assertEqual(set(p["days"]), {str(d["day"]) for d in b["days"]})
+            got = [(int(d), x["a"], x["b"]) for d, rows in p["days"].items() for x in rows]
+            self.assertEqual(sorted(got), sorted(keys))
+            first = p["days"][str(keys[0][0])][0]
+            self.assertEqual((first["text"], first["cites"]), (None, []))  # the redaction added a chip: dropped
+            last = p["days"][str(keys[-1][0])][-1]
+            self.assertTrue(last["text"].startswith("Agent Alpha and the pair"))
+            self.assertEqual(last["cites"], [{"n": 1, "ref": chat[keys[-1][0]], "day": keys[-1][0]}])
+            self.assertIn(chat[keys[-1][0]], load(data, f"sources/{keys[-1][0]}.json"))
+            v = validate_bundle.validate(data, os.path.join(tmp, "meta"), common_words=os.path.join(tmp, "common_words.json"))
+            self.assertEqual(v.errors, [])
+            p["days"][str(keys[-1][0])][-1].update(a="agent-nobody", w=0, cites=[{"n": 1, "ref": "nope", "day": 0}])
+            with open(os.path.join(data, "pairs.json"), "w") as f:
+                json.dump(p, f)
+            v = validate_bundle.validate(data, os.path.join(tmp, "meta"), common_words=os.path.join(tmp, "common_words.json"))
+            self.assertTrue(any("strongest" in e for e in v.errors))
+            self.assertTrue(any("two agent ids" in e for e in v.errors))
+            self.assertTrue(any("w not > 0" in e for e in v.errors))
+            self.assertTrue(any("kind:id" in e for e in v.errors))
+        finally:
+            shutil.rmtree(tmp)
+
+
 class Budget(unittest.TestCase):
     def test_entities_trimmed_to_fit(self):
         tmp = tempfile.mkdtemp()
@@ -302,6 +491,83 @@ class Redaction(unittest.TestCase):
         # a part-word PERSON span is widened to the whole word
         out, _ = build_bundle.redact(text, [(27, 31, "PERSON", "hson")], n, {"PERSON"})
         self.assertEqual(out, "the Pauli gates and Mr [human]")
+
+    def test_context_handles(self):
+        n = build_bundle.Names([{"id": "agent-alpha", "name": "Agent Alpha"}], [], rules={"context": ["pebble"]})
+        cut = [
+            "Agent Alpha replied to pebble about the oven.",
+            "the commenter Pebble liked it",
+            "Pebble, a buyer on the market, sold out.",
+            "see u/pebble and @Pebble",
+            "two comments by `pebble` so far",
+            "a username: pebble",
+        ]
+        for text in cut:
+            out, _ = build_bundle.redact(text, [], n, set(), tagged=True)
+            self.assertNotIn("ebble", out, text)
+        kept = ["The path was paved with a pebble from the moon.", "Pebble mosaics need a steady hand and glue.",
+                "A pebble sat on the desk, and the agents ordered a bigger oven."]
+        for text in kept:
+            self.assertEqual(build_bundle.redact(text, [], n, set())[0], text)
+
+    def test_common_word_name_acting_as_person(self):
+        n = build_bundle.Names([], ["Zero", "Max"], zipf=lambda w: {"zero": 5.0, "max": 5.0}.get(w, 0.0))
+        for text, want in (
+                ("**Also:** MAX posted a NEW top-level comment (12345).", "**Also:** [human] posted a NEW top-level comment (12345)."),
+                ("- **External participants:** **Zero**. Snapshot taken.", "- **External participants:** **[human]**. Snapshot taken."),
+                ("Then Max replied with a fix.", "Then [human] replied with a fix.")):
+            self.assertEqual(build_bundle.redact(text, [], n, set(), tagged=True)[0], want)
+        for text in ("Zero errors were found.", "Set max to 5 and retry.", "The MAX value is 9.", "Ground Zero lab"):
+            self.assertEqual(build_bundle.redact(text, [], n, set(), tagged=True)[0], text)
+
+    def test_chess_game_ids_and_accounts(self):
+        n = build_bundle.Names([{"id": "agent-alpha", "name": "Agent Alpha"}], ["Zed Quill"])
+        for text, want in (
+                ("Lost to [human] (wnZTu3Q9) on lichess.", "Lost to [human] ([id]) on lichess."),
+                ("Played Zed Quill (Zq4kP9mA) again.", "Played [human] ([id]) again."),
+                ("see https://lichess.org/wnZTu3Q9 and lichess.org/AbCd1234efGh/black.",
+                 "see https://lichess.org/[id] and lichess.org/[id]/black."),
+                ("Game: **lichess.org/wnZTu3Q9** and _lichess.org/Zq4kP9mA_", "Game: **lichess.org/[id]** and _lichess.org/[id]_"),
+                ("https://www.chess.com/game/live/123456789 and chess.com/member/zzqplayer",
+                 "https://www.chess.com/game/live/[id] and chess.com/member/[human]"),
+                ("lichess.org/@/agent-alpha challenged lichess.org/@/zzqfan",
+                 "lichess.org/@/agent-alpha challenged lichess.org/@/[human]")):
+            self.assertEqual(build_bundle.redact(text, [], n, set())[0], want)
+        for text in ("Met [human] (designer) and [human] (Designer) at noon.", "lichess.org/training/daily and "
+                     "lichess.org/tournament", "chess.com/play/online", "A note (wnZTu3Q9) with no chip"):
+            self.assertEqual(build_bundle.redact(text, [], n, set())[0], text)
+
+    def test_url_tokens(self):
+        n = build_bundle.Names([], [], rules={"profile_allow": ["zzqagentbot"]})
+        for text, want in (
+                ("confirm at https://lichess.org/signup/confirm/eyJhbGciOiJIUzI1NiJ9abcDEF== now",
+                 "confirm at https://lichess.org/signup/confirm/[id] now"),
+                ("doc https://docs.example.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit?usp=sharing",
+                 "doc https://docs.example.com/document/d/[id]/edit?usp=sharing"),
+                ("login via example.org/auth?token=AbCdEfGhIjKlMnOpQrStUvWx12", "login via example.org/auth?token=[id]"),
+                ("not a kept host: docs.google.example.com/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+                 "not a kept host: docs.google.example.com/d/[id]"),
+                ("fake.youtube.com.example.org/v/AbCdEfGhIjKlMnOpQrStUvWx12", "fake.youtube.com.example.org/v/[id]")):
+            self.assertEqual(build_bundle.redact(text, [], n, set())[0], want)
+        for text in ("doc https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit and "
+                     "drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view",
+                     "video https://www.youtube.com/watch?v=AbCdEfGhIjKlMnOpQrStUvWx12, "
+                     "studio.youtube.com/channel/UCAbCdEfGhIjKlMnOpQrStUv and youtu.be/AbCdEfGhIjKlMnOpQrStUvWx12",
+                     "see lichess.org/team/ai-village, lichess.org/auth/magic-link/sent and lichess.org/@/zzqagentbot",
+                     "https://example.com/repo/commit/0123456789abcdef0123456789abcdef01234567",
+                     "the file SomeVeryLongCamelCaseFileNameHere.py has no host",
+                     "lichess.org/analysis#12 and lichess.org/signup"):
+            self.assertEqual(build_bundle.redact(text, [], n, set())[0], text)
+
+    def test_truncated_email_in_a_mail_header(self):
+        n = build_bundle.Names([], [])
+        out, _ = build_bundle.redact('First email in Sent: "To: ada@zornmail." - "Thank you"', [], n, set())
+        self.assertEqual(out, 'First email in Sent: "To: [email]." - "Thank you"')
+        for text in ("uses actions/checkout@v4 and npm i react@18", "To: the team", "cc: none", "To: ada@zornmail.org"):
+            out, _ = build_bundle.redact(text, [], n, set())
+            self.assertNotIn("zornmail", out)
+            if "@" not in text or "/" in text:
+                self.assertEqual(out, text)
 
     def test_extra_ids(self):
         n = build_bundle.Names([], [], extra_ids=["zzq-prober-dev", "zzq-prober", " "])
@@ -600,6 +866,120 @@ class Publish(unittest.TestCase):
 
 
 class Validator(unittest.TestCase):
+    def test_book_texts_are_checked_as_untagged(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            ids, data, b = build(tmp)
+            words, meta = os.path.join(tmp, "common_words.json"), os.path.join(tmp, "meta")
+            self.assertEqual(validate_bundle.validate(data, meta, common_words=words).errors, [])
+            book = load(data, "book.json")
+            book["days"][1]["text"] = "The agents asked Will for help [1]."
+            book["chapters"][0]["title"] = "A Week With Will"
+            with open(os.path.join(data, "book.json"), "w") as f:
+                json.dump(book, f)
+            alpha = load(data, "adherence/agent-alpha.json")
+            alpha["days"][0]["note"] = "Asked Will for help."
+            with open(os.path.join(data, "adherence", "agent-alpha.json"), "w") as f:
+                json.dump(alpha, f)
+            joined = "\n".join(validate_bundle.validate(data, meta, common_words=words).errors)
+            self.assertIn("book.json: 2 untagged strings still contain a capitalized common-word human name", joined)
+            self.assertIn("adherence/agent-alpha.json: 1 untagged strings", joined)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_chip_followed_by_a_bare_id(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            ids, data, b = build(tmp)
+            words, meta = os.path.join(tmp, "common_words.json"), os.path.join(tmp, "meta")
+            mem = load(data, "memory/agent-alpha.json")
+            mem["days"][0]["excerpt"] = ("Lost a game to [human] (designer) and to [human] (wnZTu3Q9) at "
+                                         "lichess.org/Zq4kP9mA/black.")
+            with open(os.path.join(data, "memory", "agent-alpha.json"), "w") as f:
+                json.dump(mem, f)
+            joined = "\n".join(validate_bundle.validate(data, meta, common_words=words).errors)
+            self.assertIn("memory/agent-alpha.json: 1 strings still contain a listed human name (chip_id 1, game_id 1)",
+                          joined)
+            mem["days"][0]["excerpt"] = "Lost a game to [human] (designer)."
+            with open(os.path.join(data, "memory", "agent-alpha.json"), "w") as f:
+                json.dump(mem, f)
+            self.assertEqual(validate_bundle.validate(data, meta, common_words=words).errors, [])
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_book_scroll_fields_are_checked(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            ids, data, b = build(tmp)
+            words, meta = os.path.join(tmp, "common_words.json"), os.path.join(tmp, "meta")
+            book = load(data, "book.json")
+            c1 = book["chapters"][0]
+            c1["hook"] = "Did the agents really plan a bakery on the moon?"
+            c1["beats"][0] = {"text": "The agents planned a bakery [9].", "cites": [9]}
+            c1["beats"][1]["cites"] = [1]
+            c1["figure"]["value"] = "99"
+            book["chapters"][1]["hook"] = "A hook for a chapter that has no text"
+            with open(os.path.join(data, "book.json"), "w") as f:
+                json.dump(book, f)
+            joined = "\n".join(validate_bundle.validate(data, meta, common_words=words).errors)
+            self.assertIn("chapters[0]: hook: the hook is a question", joined)
+            self.assertIn("chapters[0]: beats: beat 1 cites [9]", joined)
+            self.assertIn("chapters[0]: figure: the figure value is not a number the paragraph states", joined)
+            self.assertIn("chapters[1]: hook without a chapter text", joined)
+            book["chapters"][0]["hook"] = "The agents asked Will to taste 2 ovens of bread"
+            book["chapters"][0]["beats"] = book["chapters"][0]["figure"] = book["chapters"][1]["hook"] = None
+            with open(os.path.join(data, "book.json"), "w") as f:
+                json.dump(book, f)
+            joined = "\n".join(validate_bundle.validate(data, meta, common_words=words).errors)
+            self.assertIn("book.json: 1 untagged strings still contain a capitalized common-word human name", joined)
+            self.assertNotIn("hook:", joined)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_book_stage_is_checked(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            ids, data, b = build(tmp)
+            words, meta = os.path.join(tmp, "common_words.json"), os.path.join(tmp, "meta")
+            book = load(data, "book.json")
+
+            def check(edit):
+                bk = json.loads(json.dumps(book))
+                edit(bk["chapters"])
+                with open(os.path.join(data, "book.json"), "w") as f:
+                    json.dump(bk, f)
+                return "\n".join(validate_bundle.validate(data, meta, common_words=words).errors)
+            for edit, msg in (
+                    (lambda cs: cs[0]["stage"]["props"][0].update(kind="rocket"), "stage: prop 1 kind 'rocket'"),
+                    (lambda cs: cs[0]["stage"]["props"].clear(), "stage: give 1 to 3 props"),
+                    (lambda cs: cs[0]["stage"]["moments"][0].update(beat=3), "stage: moment 1 beat 3 is not a beat"),
+                    (lambda cs: cs[0]["stage"]["moments"][0].update(agents=["o9"]), "moment 1 agent 'o9' is not an agent"),
+                    (lambda cs: cs[0]["stage"]["moments"][0].update(agents=["human"]), "agent 'human' is not an agent"),
+                    (lambda cs: cs[0]["stage"]["props"][0].update(label="a very long label"), "has 4 words"),
+                    (lambda cs: cs[0]["stage"]["props"][0].update(label="a [human] stall"), "square brackets"),
+                    (lambda cs: cs[0]["stage"]["moments"][1].update(kind="dance"), "moment 2 kind 'dance'"),
+                    (lambda cs: cs[0].pop("stage"), "chapters[0]: no stage"),
+                    (lambda cs: cs[1].update(stage=book["chapters"][0]["stage"]), "chapters[1]: stage without a chapter text"),
+                    (lambda cs: cs[0]["stage"]["props"][1].update(label="help from Will"),
+                     "book.json: 1 untagged strings still contain a capitalized common-word human name")):
+                self.assertIn(msg, check(edit))
+            self.assertEqual(check(lambda cs: cs[0].update(stage=None)), "")
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_book_null_and_size(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            ids, data, b = build(tmp)
+            words, meta = os.path.join(tmp, "common_words.json"), os.path.join(tmp, "meta")
+            with open(os.path.join(data, "book.json"), "w") as f:
+                f.write("null" + " " * 1_000_000)
+            joined = "\n".join(validate_bundle.validate(data, meta, common_words=words).errors)
+            self.assertIn("book.json: present but not an object", joined)
+            self.assertIn("book.json is 1000004 bytes (limit 1000000)", joined)
+        finally:
+            shutil.rmtree(tmp)
+
     def test_full_list_and_structure(self):
         tmp = tempfile.mkdtemp()
         try:

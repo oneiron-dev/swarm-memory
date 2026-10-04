@@ -20,12 +20,16 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from build_bundle import (EXTRA_IDS, FAMILIES, MARKUP_INLINE_RE, MARKUP_LINE_RE, RULES, BuildError, Names,  # noqa: E402
-                          as_list, at_rule_hits, json_path, load_extra_ids, load_human_names, load_rules, load_zipf)
+from build_bundle import (BOOK_SCHEMA, BOOK_SCORES, CONTEXT_HANDLES, EXTRA_IDS, FAMILIES, MARKUP_INLINE_RE,  # noqa: E402
+                          MARKUP_LINE_RE, PAIR_REF_RE, PAIR_TOP, PAIRS_SCHEMA, RULES, SCHEMA, BuildError, Names, as_list,
+                          at_rule_hits, beats_problem, day_pairs, figure_problem, hook_problem, json_path,
+                          load_context_handles, load_extra_ids, load_human_names, load_rules, load_zipf, pair_problem,
+                          stage_problem)
 
 MAX_BUNDLE = 3_000_000
 MAX_FILE = 2_000_000  # any on-demand file
 MAX_TOTAL = 100_000_000
+MAX_BOOK = 1_000_000  # book.json loads when the book opens
 ENTITY_KEYS = ("id", "text", "label", "aliases", "count", "n_agents", "first_day", "last_day", "examples", "example_days")
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 REF_PREFIX_RE = re.compile(r"(?:chat|ev|cc|cus|ccs|mem|sum):$")
@@ -34,13 +38,15 @@ SUMMARY_KEYS = ("id", "scope", "key", "day", "date", "text", "cites", "model")
 
 
 class V:
-    def __init__(self, data_dir, zipf=None, untagged=None, human_names=None, extra_ids=None, rules=None):
+    def __init__(self, data_dir, zipf=None, untagged=None, human_names=None, extra_ids=None, rules=None,
+                 context_handles=None):
         self.dir = data_dir
         self.zipf = zipf
         self.untagged = untagged
         self.human_names = human_names
         self.extra_ids = extra_ids
         self.rules = rules
+        self.context_handles = context_handles
         self.n_summaries = 0
         self.errors = []
         self.warnings = []
@@ -115,7 +121,7 @@ class V:
             return
         m = b["manifest"]
         if self.keys(m, ("schema", "generated", "dataset", "cite", "range", "counts", "tagger", "summarizer"), "manifest"):
-            self.need(m["schema"] == "swarm-bundle/1", f"manifest.schema {m['schema']!r}")
+            self.need(m["schema"] == SCHEMA, f"manifest.schema {m['schema']!r}")
             self.need(isinstance(m["generated"], str) and ISO_Z_RE.match(m["generated"]), "manifest.generated not ISO Z")
             self.need("AI Digest / AI Village" in (m["cite"] or ""), "manifest.cite lacks 'AI Digest / AI Village'")
             self.keys(m["range"], ("first_day", "last_day", "first_date", "last_date"), "manifest.range")
@@ -324,7 +330,157 @@ class V:
                     self.need(isinstance(s, list) and len(s) == 3 and 0 <= s[0] < s[1] <= len(row["text"]),
                               f"{w} {ref}: span {s} outside text")
 
+        self.book(day_nums, agent_ids)
+        self.pairs(day_nums, agent_ids, b)
         self.privacy_and_sizes(meta_dir, agent_ids, ent_ids)
+
+    def cited_text(self, rec, where):
+        """A book text: string or null; every [n] bound to a cite; every cite's ref in sources/<cite day>.json."""
+        text = rec.get("text")
+        if not self.need(text is None or isinstance(text, str), f"{where}: text not a string or null"):
+            return
+        if not self.need(isinstance(rec.get("cites"), list), f"{where}: cites not a list"):
+            return
+        ns = set()
+        for c in rec["cites"]:
+            if not self.keys(c, ("n", "ref", "day"), f"{where} cite"):
+                continue
+            ns.add(c["n"])
+            src = self.sources(c["day"])
+            self.need(src is not None and c["ref"] in src, f"{where}: cited ref {c['ref']} not in sources/{c['day']}.json")
+        markers = {int(x) for x in re.findall(r"\[(\d+)\]", text or "")}
+        self.need(not markers - ns, f"{where}: markers {sorted(markers - ns)} without a cite")
+
+    def scroll(self, c, w):
+        """A chapter's optional hook, beats and figure (absent or null, else valid beside its text and cites)."""
+        text = c["text"] if isinstance(c.get("text"), str) else None
+        ns = {x.get("n") for x in c["cites"] if isinstance(x, dict)} if isinstance(c.get("cites"), list) else set()
+        for key, check in (("hook", lambda v: hook_problem(v, text or "")), ("beats", lambda v: beats_problem(v, ns)),
+                           ("figure", lambda v: figure_problem(v, ns, text or ""))):
+            v = c.get(key)
+            if v is None:
+                continue
+            if text is None:
+                self.err(f"{w}: {key} without a chapter text")
+                continue
+            why = check(v)
+            self.need(why is None, f"{w}: {key}: {why}")
+        # the stage direction (swarm-book/1.2): present on every chapter, null or valid beside text, beats and agents
+        if not self.need("stage" in c, f"{w}: no stage (null or an object)"):
+            return
+        st = c["stage"]
+        if st is None:
+            return
+        if text is None:
+            self.err(f"{w}: stage without a chapter text")
+            return
+        beats = c.get("beats") if isinstance(c.get("beats"), list) else []
+        agents = set(c["agents"]) if isinstance(c.get("agents"), list) else set()
+        why = stage_problem(st, len(beats), agents, text)
+        self.need(why is None, f"{w}: stage: {why}")
+
+    def book(self, day_nums, agent_ids):
+        """book.json, adherence/<agent>.json and talk/<agent>.json (all optional)."""
+        days = set(day_nums)
+        b = self.load("book.json")
+        chapter_ns = set()
+        present = os.path.exists(os.path.join(self.dir, "book.json"))
+        if present and b is None:
+            self.err("book.json: present but not an object (null or invalid)")
+        if b is not None and self.keys(b, ("schema", "generated", "model", "chapters", "days"), "book.json"):
+            self.need(b["schema"] == BOOK_SCHEMA, f"book.json: schema {b['schema']!r}")
+            seen = []
+            for i, c in enumerate(b["chapters"]):
+                w = f"book.json chapters[{i}]"
+                if not self.keys(c, ("n", "goal", "title", "first_day", "last_day", "first_date", "last_date", "days",
+                                     "agents", "stats", "text", "cites"), w):
+                    continue
+                self.need(c["n"] == i + 1, f"{w}: n {c['n']} != {i + 1}")
+                chapter_ns.add(c["n"])
+                self.need(c["title"] is None or isinstance(c["title"], str), f"{w}: title not a string or null")
+                self.need(bool(c["days"]) and set(c["days"]) <= days, f"{w}: days empty or unknown")
+                self.need(c["days"] == sorted(c["days"]) and c["days"][:1] == [c["first_day"]]
+                          and c["days"][-1:] == [c["last_day"]], f"{w}: days not sorted or first/last mismatch")
+                self.need(set(c["agents"]) <= agent_ids, f"{w}: unknown agent")
+                self.keys(c["stats"], ("days", "chat", "sessions", "memories", "human_chat", "agents"), f"{w}.stats")
+                seen += c["days"]
+                self.cited_text(c, w)
+                self.scroll(c, w)
+            self.need(len(seen) == len(set(seen)), "book.json: a day is in two chapters")
+            bdays = [d.get("day") for d in b["days"] if isinstance(d, dict)]
+            self.need(bdays == day_nums, "book.json: days != bundle days")
+            self.need(set(seen) == days, "book.json: chapters do not cover every day exactly once")
+            for i, d in enumerate(b["days"]):
+                w = f"book.json days[{i}]"
+                if self.keys(d, ("day", "date", "chapter", "text", "cites"), w):
+                    self.need(d["chapter"] in chapter_ns, f"{w}: chapter {d['chapter']} unknown")
+                    self.cited_text(d, w)
+        for sub in ("adherence", "talk"):
+            d = os.path.join(self.dir, sub)
+            for fn in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+                doc, w = self.load(f"{sub}/{fn}"), f"{sub}/{fn}"
+                if not self.keys(doc, ("agent", "days"), w):
+                    continue
+                self.need(doc["agent"] == fn[:-5] and doc["agent"] in agent_ids, f"{w}: agent mismatch")
+                for i, row in enumerate(doc["days"]):
+                    if sub == "adherence" and self.keys(row, ("day", "chapter", "score", "note"), f"{w}[{i}]"):
+                        self.need(row["day"] in days, f"{w}[{i}]: unknown day")
+                        self.need(row["chapter"] is None or not chapter_ns or row["chapter"] in chapter_ns,
+                                  f"{w}[{i}]: chapter unknown")
+                        self.need(row["score"] is None or row["score"] in BOOK_SCORES, f"{w}[{i}]: score {row['score']!r}")
+                        self.need(row["note"] is None or isinstance(row["note"], str), f"{w}[{i}]: note not a string")
+                    elif sub == "talk" and self.keys(row, ("day", "partners"), f"{w}[{i}]"):
+                        self.need(row["day"] in days, f"{w}[{i}]: unknown day")
+                        self.need(all(isinstance(p, list) and len(p) == 2 and p[0] in agent_ids and isinstance(p[1], int)
+                                      for p in row["partners"]) and len(row["partners"]) <= 5,
+                                  f"{w}[{i}]: bad partners")
+
+    def pairs(self, day_nums, agent_ids, b):
+        """pairs.json (optional): every bundle day; per day exactly the page's talking pairs from the interaction
+        edges; a and b two agent ids (human included); w > 0; a text is null or passes pair_problem with 1 or more
+        cites in kind:id form whose refs are in that day's sources file."""
+        if not os.path.exists(os.path.join(self.dir, "pairs.json")):
+            return
+        p = self.load("pairs.json")
+        if not self.keys(p, ("schema", "generated", "model", "days"), "pairs.json"):
+            return
+        self.need(p["schema"] == PAIRS_SCHEMA, f"pairs.json: schema {p['schema']!r}")
+        if not self.need(isinstance(p["days"], dict), "pairs.json: days not an object"):
+            return
+        self.need(set(p["days"]) == {str(d) for d in day_nums}, "pairs.json: days != bundle days")
+        edges = _obj(_obj(_obj(b).get("views")).get("interactions")).get("edges")
+        top = day_pairs(edges) if isinstance(edges, list) else {}
+        for k, rows in p["days"].items():
+            w = f"pairs.json days[{k}]"
+            if not self.need(isinstance(rows, list), f"{w}: not a list"):
+                continue
+            day = int(k) if k.isdigit() else None
+            want = [{x, y} for x, y, _ in top.get(day, [])]
+            self.need([{r.get("a"), r.get("b")} for r in _objs(rows)] == want,
+                      f"{w}: pairs are not the day's {PAIR_TOP} strongest from the interaction edges")
+            for i, r in enumerate(rows):
+                ww = f"{w}[{i}]"
+                if not self.keys(r, ("a", "b", "w", "text", "cites"), ww):
+                    continue
+                self.need(r["a"] in agent_ids and r["b"] in agent_ids and r["a"] != r["b"], f"{ww}: a, b not two agent ids")
+                self.need(type(r["w"]) in (int, float) and r["w"] > 0, f"{ww}: w not > 0")
+                if not self.need(isinstance(r["cites"], list), f"{ww}: cites not a list"):
+                    continue
+                if r["text"] is None:
+                    self.need(not r["cites"], f"{ww}: cites without a text")
+                    continue
+                why = pair_problem(r["text"])
+                self.need(why is None, f"{ww}: {why}")
+                self.need(bool(r["cites"]), f"{ww}: a text without cites")
+                for c in r["cites"]:
+                    if not self.keys(c, ("n", "ref", "day"), f"{ww} cite"):
+                        continue
+                    if not self.need(isinstance(c["ref"], str) and PAIR_REF_RE.match(c["ref"]),
+                                     f"{ww}: cite ref {c['ref']!r} not in kind:id form"):
+                        continue
+                    self.need(c["day"] == day, f"{ww}: cite day {c['day']} != {day}")
+                    src = self.sources(c["day"])
+                    self.need(src is not None and c["ref"] in src, f"{ww}: cited ref {c['ref']} not in sources/{c['day']}.json")
 
     def full_names(self, meta_dir, agent_ids):
         """The FULL authoritative list under the build's rules (nothing pruned)."""
@@ -335,6 +491,8 @@ class V:
             hn = load_human_names(self.human_names or os.path.join(meta_dir, "human_names.json"))
             extra = load_extra_ids(self.extra_ids or os.path.join(meta_dir or "", EXTRA_IDS))
             self.rule_data = load_rules(self.rules or os.path.join(meta_dir or "", RULES))
+            self.rule_data["context"] = load_context_handles(self.context_handles
+                                                             or os.path.join(meta_dir or "", CONTEXT_HANDLES))
         except BuildError as e:
             self.err(str(e))
             return None
@@ -367,6 +525,23 @@ class V:
         for f in _objs(self.load("findings.json")):  # malformed findings are reported by the shape check
             yield "findings.json", f.get("title")
             yield "findings.json", f.get("body")
+        book = _obj(self.load("book.json"))  # the book's texts are new text without tags
+        for c in _objs(book.get("chapters")):
+            for k in ("goal", "title", "text", "hook"):
+                yield "book.json", c.get(k)
+            for b in _objs(c.get("beats")):
+                yield "book.json", b.get("text")
+            fig = _obj(c.get("figure"))
+            for k in ("value", "label"):
+                yield "book.json", fig.get(k)
+            st = _obj(c.get("stage"))
+            for x in _objs(st.get("props")) + _objs(st.get("moments")):
+                yield "book.json", x.get("label")
+        for d in _objs(book.get("days")):
+            yield "book.json", d.get("text")
+        for rows in _obj(_obj(self.load("pairs.json")).get("days")).values():  # new text without tags, like the book
+            for r in _objs(rows):
+                yield "pairs.json", r.get("text")
 
         def cites_untagged(rec):
             return any(f"row:{c.get('ref')}" in untagged for c in _objs(rec.get("cites")))
@@ -388,6 +563,9 @@ class V:
                     for rec in _objs(self.load(rel)):
                         if f"summary:{rec.get('id')}" in untagged:
                             yield rel, rec.get("text")
+                elif rel.startswith("adherence/"):
+                    for row in _objs(_obj(self.load(rel)).get("days")):
+                        yield rel, row.get("note")
                 elif rel.startswith("summaries/village/"):
                     rec = _obj(self.load(rel))
                     if cites_untagged(rec):
@@ -417,6 +595,8 @@ class V:
                 total += size
                 if rel != "bundle.json":
                     self.need(size < MAX_FILE, f"{rel} is {size} bytes (on-demand limit {MAX_FILE})")
+                if rel == "book.json":
+                    self.need(size < MAX_BOOK, f"book.json is {size} bytes (limit {MAX_BOOK})")
                 with open(path, encoding="utf-8", errors="replace") as f:
                     raw = f.read()
                 # every served path, listed or not: its file and dir names are served too
@@ -497,12 +677,12 @@ def _strings(obj):
 
 
 def validate(data_dir, meta_dir=None, zipf=None, untagged=None, human_names=None, common_words=None, extra_ids=None,
-             rules=None):
+             rules=None, context_handles=None):
     """`zipf` (or `common_words`, a JSON {word: zipf}) replaces the wordfreq package; `untagged` are the rows
     and summaries the build redacted without tags (default: <data>/../redaction_names.json); `extra_ids` is
     the extra id list (default meta/extra_human_ids.json)."""
     v = V(data_dir, zipf=zipf or (load_zipf(common_words) if common_words else None), untagged=untagged,
-          human_names=human_names, extra_ids=extra_ids, rules=rules)
+          human_names=human_names, extra_ids=extra_ids, rules=rules, context_handles=context_handles)
     v.run(meta_dir)
     return v
 

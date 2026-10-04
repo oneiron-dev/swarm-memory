@@ -44,7 +44,31 @@ except ImportError:  # stdlib fallback, same output
         return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode()
 
 
-SCHEMA = "swarm-bundle/1"
+SCHEMA = "swarm-bundle/1.3"
+BOOK_SCHEMA = "swarm-book/1.2"
+BOOK_SCORES = ("on", "partly", "off", "idle")
+# the scroll fields of a chapter (book.py hooks): one hook line, 3 to 6 cited beats, one figure from the text
+HOOK_WORDS = (6, 14)
+BEAT_COUNT = (3, 6)
+BEAT_WORDS = 24  # counted without the [n] markers
+FIGURE_VALUE_CHARS = 8
+FIGURE_LABEL_WORDS = 7
+# a chapter's stage direction (book.py stage): props stand in the village pen for the whole chapter, a moment plays
+# when its beat lights; the kinds are the page's catalogue
+STAGE_PROPS = ("stall", "mailbox", "ballot", "scaffold", "gallery", "chessboard", "stage", "press", "garden",
+               "lanterns", "cloud", "signpost")
+STAGE_MOMENTS = ("celebrate", "build", "send", "vote", "win", "fail", "gather", "play")
+STAGE_PROP_COUNT = (1, 3)
+STAGE_MOMENT_MAX = 6
+STAGE_AGENTS_MAX = 4
+STAGE_LABEL_WORDS = 3
+STAGE_LABEL_CHARS = 32  # a tiny sign on a prop
+TALK_TOP = 5
+PAIRS_SCHEMA = "swarm-pairs/1"
+PAIR_TOP = 3  # talking pairs per day, as the book page draws them
+PAIR_WORDS = (8, 16)
+PAIR_CITES = 3
+PAIR_REF_RE = re.compile(r"^[a-z_]+:\S+$")
 DATASET = "aidigestorg/ai-village@838b4150"
 CITE = "Data: AI Digest / AI Village (theaidigest.org/village)"
 SUMMARIZER = "gpt-5.6-luna"
@@ -119,8 +143,43 @@ AT_HANDLE_RE = re.compile(r"(?<![\w@.+-])@([A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z
 
 # Identifier rules beyond names. Each match is cut with the token of its rule (RULE_TOKEN; [human] otherwise).
 RULES = "extra_human_rules.json"
-PRIVATE_RULES = frozenset({"extra", "exact", "extra_id", "cap"})  # explicit private ids: no public exemption applies  # meta/: exact-case names, ids, per-location tokens, dropped entities, profile allowlist
-RULE_TOKEN = {"email_pct": EMAIL_TOKEN, "phone": ID_TOKEN, "order": ID_TOKEN, "extra_id": ID_TOKEN}
+CONTEXT_HANDLES = "context_handles.json"  # meta/: handles that are also English words: cut only in handle context
+PRIVATE_RULES = frozenset({"extra", "exact", "extra_id", "cap", "context", "acts"})  # explicit private ids: no public exemption applies  # meta/: exact-case names, ids, per-location tokens, dropped entities, profile allowlist
+RULE_TOKEN = {"email_pct": EMAIL_TOKEN, "email_cut": EMAIL_TOKEN, "phone": ID_TOKEN, "order": ID_TOKEN,
+              "extra_id": ID_TOKEN, "game_id": ID_TOKEN, "chip_id": ID_TOKEN, "url_token": ID_TOKEN}
+# game and profile pages that show the players' usernames: a lichess.org path segment of 8-12 letters and digits (not a
+# site route) and the user after lichess.org/@/; chess.com/game/... ids and chess.com/member/<user>
+LICHESS_PATH_RE = re.compile(r"(?i)(?<![A-Za-z0-9.-])(?:https?://)?(?:[a-z]{2,3}\.)?lichess\.org((?:/[^\s/?#()\[\]<>\"'`*]+)+)")
+CHESSCOM_PATH_RE = re.compile(r"(?i)(?<![A-Za-z0-9.-])(?:https?://)?(?:www\.)?chess\.com((?:/[^\s/?#()\[\]<>\"'`*]+)+)")
+LICHESS_ROUTES = frozenset("""
+training analysis tournament broadcast practice streamer streamers insights coordinate variant editor learn swiss simul
+study team forum blog puzzle puzzles paste games timeline account settings preferences inbox notifications history
+opening openings player players leaderboard storm racer streak dashboard features download contact source mobile
+tournaments broadcasts""".split())
+GAME_ID_RE = re.compile(r"[A-Za-z0-9]{8,12}")
+LICHESS_TOKEN_RE = re.compile(r"[A-Za-z0-9_=+-]{16,}")  # a sign-up confirmation or magic-link token
+# a token in any URL: a path or query segment of 24+ letters, digits, "_" or "-" with both cases (a capability link,
+# an account or document id); the host and the rest of the path stay. Public documents and videos the agents made
+# (Google Docs and Drive, YouTube) keep their ids: those identify no person.
+URL_PATH_RE = re.compile(r"(?i)(?<![\w@.-])(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[^\s\"<>()\[\]`*\\]*)")
+URL_TOKEN_HOSTS_KEPT = ("docs.google.com", "drive.google.com", "youtube.com", "youtu.be")
+URL_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{24,}")
+# a bare 8-character id in parentheses right after a [human] chip ("[human] (wnZTu3Q9)"): a game or account id
+CHIP_ID_RE = re.compile(r"\[human\][ \t]*\(([A-Za-z0-9]{8})\)")
+# a context handle counts within three words of one of these, right after "@" or "u/", or inside backticks
+HANDLE_CUE_RE = re.compile(r"(?i)\b(?:user(?:name)?s?|handles?|creators?|traders?|bettors?|buyers?|commenters?|posters?)\b"
+                           r"|\b(?:replied|reply)\s+to\b")
+# a listed common-word name ("Zero", "MAX") acting as a person: the subject of one of these verbs, or the value of a
+# people label in a stats line ("External participants: **Zero**")
+PERSON_VERB_RE = re.compile(r"(?:\*\*)?[ \t]+(?:(?:just|also|then|has|had|have)[ \t]+)?(?:posted|replied|commented|wrote|"
+                            r"said|asked|sent|shared|liked|emailed|messaged|joined|subscribed|mentioned|responded|"
+                            r"thanked|suggested|requested|offered|tweeted|answered|reacted|followed|signed[ \t]+up)\b")
+PEOPLE_LABEL_RE = re.compile(r"(?i)\b(?:participants?|commenters?|repliers?|subscribers?|volunteers?|contributors?|"
+                             r"customers?|buyers?|donors?|senders?|followers?|viewers?|readers?)\**[ \t]*:[*\s]{0,6}$")
+# a mailbox whose domain lost its dot and TLD in a mail header ("To: ada@zornmail."), which EMAIL_RE misses
+ACTS_WORD_RE = re.compile(r"(?<![\w@./-])[A-Z][A-Za-z]+(?![\w-])")
+TRUNC_EMAIL_RE = re.compile(r"(?i)\b(?:to|from|cc|bcc|reply-to)[ \t]*:[ \t]*[\"“'<(]?"
+                            r"([\w.+-]*[A-Za-z0-9]@[A-Za-z0-9][\w-]*)(?![\w@-]|\.\w)")
 PCT_EMAIL_RE = re.compile(r"(?:(?<=%[0-9A-Fa-f]{2})|(?<![\w.+%-]))[\w.+-]+%(?:25)?40[\w-]+(?:\.[\w-]+)+")  # a%40b.org
 # phone numbers: international (+44 20 7946 0958), (555) 201-7788, 555-201-7788 / 555.201.7788 / 555 201 7788, and
 # ten digits in a row; a NANP (US/Canada) area code and exchange start with 2-9 (so a unix time such as 1727999999 is
@@ -241,7 +300,7 @@ TITLE_NAME_RE = re.compile(r"\b(?:Dr|Prof|Professor|Doctor)\.?[ \t]+([A-Z][\w'�
 # Keys whose values are ids, refs or fixed vocabulary: the final name sweep leaves them alone.
 SWEEP_SKIP = frozenset({"id", "ref", "examples", "entity", "agent", "key", "room", "from", "to", "kind", "label",
                         "family", "date", "time", "generated", "start", "end", "schema", "dataset", "checkpoint",
-                        "snap", "summary", "scope"})
+                        "snap", "summary", "scope", "partners"})
 
 SCRUB_RE = re.compile(r"[\W_]*(?:\[(?:REDACTED|BLOB_REMOVED|IMAGE_REMOVED)\][\W_]*)+")
 # AI Digest daily texts wrap their sections in tags: a line holding only a tag (or "## <tag>", or an xml
@@ -418,6 +477,35 @@ def load_human_names(path: str) -> list:
 def load_extra_ids(path: str) -> list:
     """Usernames, handles and email-like ids of individual humans (meta/extra_human_ids.json, written by
     human_ids.py after review). Required like the name list: an empty list is written when there are none."""
+    return load_human_names(path)
+
+
+def id_shaped(tok: str) -> bool:
+    """A token that reads as a generated id, not a word: it has a digit, or capitals beyond a Title Case or ALL-CAPS
+    word ("wnZTuaQb"; not "designer", "Designer" or "DESIGNER")."""
+    if any(c.isdigit() for c in tok):
+        return True
+    return not (tok.islower() or tok.isupper() or (tok[:1].isupper() and tok[1:].islower()))
+
+
+def url_tokens(text: str) -> list:
+    """(s, e, "url_token") of 24+ character mixed-case segments in the path or query of a URL."""
+    out = []
+    for m in URL_PATH_RE.finditer(text):
+        host = m.group(1).lower()
+        if any(host == h or host.endswith("." + h) for h in URL_TOKEN_HOSTS_KEPT):
+            continue
+        base = m.start(2)
+        for sm in re.finditer(r"[^/?#&=;]+", m.group(2)):
+            seg = sm.group().rstrip(".,;:!_~")
+            if URL_TOKEN_RE.fullmatch(seg) and any(c.islower() for c in seg) and any(c.isupper() for c in seg):
+                out.append((base + sm.start(), base + sm.start() + len(seg), "url_token"))
+    return out
+
+
+def load_context_handles(path: str) -> list:
+    """meta/context_handles.json: handles of individual humans that are also English words ("cairn"), cut only in
+    handle context (see Names.context_matches). Required like the name list: [] when there are none."""
     return load_human_names(path)
 
 
@@ -602,6 +690,11 @@ class Names:
                  so also inside "@x", "x-dev", "x_y", URLs and paths; their parts may be joined by 0-3 separators
       at         an @handle that is not exactly an agent's display name or slug (any case and separators), a public
                  account (PUBLIC_HANDLES) or, inside code, a code at-word (CODE_AT_WORDS)
+      context    a handle from meta/context_handles.json (an English word too): any case, only within three words
+                 of a handle cue (user, username, handle, creator, trader, bettor, buyer, commenter, poster,
+                 "replied to", "reply to"), right after "@" or "u/", or inside backticks
+      acts       a word-cap name written capitalized as the subject of a person verb ("MAX posted") or as the
+                 value of a people label ("participants: **Zero**"), in every text
       neighbour  capitalized words right after or before [human] ("[human] ("x") Surname", "Firstname [human]",
                  "Surname 'x' [human]"), unless agent names, stop words or roles; with a nickname at most NICK_WORDS
                  words; except the word next to a nickname, also not sentence-initial words (before the token),
@@ -631,7 +724,9 @@ class Names:
         self.zipf = zipf or (lambda w: 0.0)
         self.hits = collections.Counter()  # matches per rule, reset by the caller per assemble
         self.skipped = collections.Counter()
+        self.stop_names = set()  # one-word listed names skipped as stop words ("Max"): only the acts rule uses them
         self.entries = self._entries(human_names)
+        self.acts_words = {e[0][0] for e in self.entries if e[3] == "word-cap"} | self.stop_names
         # the words of listed names shaped like "Firstname Lastname" (2-3 Title Case words): the neighbour rule takes
         # them for name words even when they are common English words ("Zara")
         self.name_tokens = {t.lower() for n in human_names or [] if isinstance(n, str) and 2 <= len(n.split()) <= 3
@@ -657,6 +752,9 @@ class Names:
         alts = sorted((r"[\W_]{0,3}".join(map(re.escape, p)) for p in parts if p), key=len, reverse=True)
         self.keep_re = re.compile(r"(?<![^\W_])(?:" + "|".join(alts) + r")(?![^\W_])", re.I) if alts else None
         self.profile_allow = PROFILE_ALLOW | {x.lower() for x in rules.get("profile_allow", [])}
+        parts = [[p for p in re.split(r"[\W_]+", x) if p] for x in rules.get("context", [])]
+        alts = sorted((r"[\W_]{0,3}".join(map(re.escape, p)) for p in parts if p), key=len, reverse=True)
+        self.context_re = re.compile(r"(?<![^\W_])(?:" + "|".join(alts) + r")(?![^\W_])", re.I) if alts else None
         self._build()
 
     def common(self, word: str) -> bool:
@@ -678,6 +776,8 @@ class Names:
                 continue
             if toks in self.agent_by_tokens or all(t in ignorable or t.isdigit() for t in toks):
                 self.skipped["stop_or_agent_words"] += 1
+                if len(toks) == 1 and toks[0] in STOP_WORDS and toks[0] not in self.agent_tokens and toks[0].isalpha():
+                    self.stop_names.add(toks[0])
                 continue
             out.append(self._entry(toks, name))
             if 2 <= len(toks) <= 3 and all(w[:1].isupper() and w.isalpha() for w in name.split()):
@@ -768,6 +868,17 @@ class Names:
                                                if not sentence_initial(text, m.start())])
         if self.ids_re is not None:
             out += [(m.start(), m.end(), "extra_id") for m in self.ids_re.finditer(text)]
+        if self.context_re is not None:
+            out += self.context_matches(text)
+        out += self.acts_matches(text)
+        if "@" in text:
+            out += [(m.start(1), m.end(1), "email_cut") for m in TRUNC_EMAIL_RE.finditer(text)]
+        if "chess" in text.lower():
+            out += self.game_matches(text)
+        if REDACT_TOKEN in text:
+            out += [(m.start(1), m.end(1), "chip_id") for m in CHIP_ID_RE.finditer(text) if id_shaped(m.group(1))]
+        if "/" in text and URL_TOKEN_RE.search(text):
+            out += url_tokens(text)
         if "%" in text:
             out += [(m.start(), m.end(), "email_pct") for m in PCT_EMAIL_RE.finditer(text)]
         out += [(m.start(), m.end(), "phone") for m in PHONE_RE.finditer(text)
@@ -832,6 +943,62 @@ class Names:
                                     or w.lower() in self.agent_tokens for w in words)):
                     out.append((m.start(), m.end(), "caps_name"))
         return out
+
+    def context_matches(self, text: str) -> list:
+        """(s, e, "context"): a context handle right after "@" or "u/", inside backticks, or within three words of
+        a handle cue on either side; elsewhere it is the English word and stays."""
+        out, code = [], None
+        for m in self.context_re.finditer(text):
+            s, e = m.start(), m.end()
+            before = " ".join(re.findall(r"\S+", text[max(0, s - 80):s])[-3:])
+            after = " ".join(re.findall(r"\S+", text[e:e + 80])[:3])
+            hit = text[max(0, s - 1):s] == "@" or text[max(0, s - 2):s].lower() == "u/"
+            if not hit:
+                hit = bool(HANDLE_CUE_RE.search(before) or HANDLE_CUE_RE.search(after))
+            if not hit and "`" in text:
+                if code is None:
+                    code = [(c.start(), c.end()) for c in CODE_RE.finditer(text)]
+                hit = any(cs < s and e < ce for cs, ce in code)
+            if hit:
+                out.append((s, e, "context"))
+        return self._outside_agents(text, out)
+
+    def game_matches(self, text: str) -> list:
+        """(s, e, rule) of chess game ids ([id]) and player accounts ([human]) in lichess.org and chess.com links."""
+        out = []
+        for site, rx in (("lichess", LICHESS_PATH_RE), ("chesscom", CHESSCOM_PATH_RE)):
+            for m in rx.finditer(text):
+                segs = []
+                for sm in re.finditer(r"/([^/]+)", m.group(1)):
+                    seg = sm.group(1).rstrip(".,;:!_~")
+                    segs.append((m.start(1) + sm.start(1), m.start(1) + sm.start(1) + len(seg), seg))
+                for i, (s, e, seg) in enumerate(segs):
+                    prev = segs[i - 1][2].lower() if i else ""
+                    if prev in ("@", "member"):  # a profile page: the account itself
+                        if seg and not self._agent_or_public(seg):
+                            out.append((s, e, "profile"))
+                    elif site == "lichess" and GAME_ID_RE.fullmatch(seg) and seg.lower() not in LICHESS_ROUTES:
+                        out.append((s, e, "game_id"))
+                    elif site == "lichess" and LICHESS_TOKEN_RE.fullmatch(seg):
+                        out.append((s, e, "url_token"))
+                    elif (site == "chesscom" and any(x[2].lower() == "game" for x in segs[:i])
+                          and any(c.isdigit() for c in seg) and len(seg) >= 5):
+                        out.append((s, e, "game_id"))
+        return out
+
+    def acts_matches(self, text: str) -> list:
+        """(s, e, "acts"): a listed common-word name (word-cap, or a one-word name skipped as a stop word), written
+        capitalized or in capitals, followed by a person verb or right after a people label."""
+        out = []
+        if not self.acts_words:
+            return out
+        for m in ACTS_WORD_RE.finditer(text):
+            if m.group().lower() not in self.acts_words:
+                continue
+            s, e = m.start(), m.end()
+            if PERSON_VERB_RE.match(text, e) or PEOPLE_LABEL_RE.search(text, max(0, s - 60), s):
+                out.append((s, e, "acts"))
+        return self._outside_agents(text, out)
 
     def _agent_or_public(self, word: str) -> bool:
         w = word.lower().lstrip("@")
@@ -1216,6 +1383,232 @@ def snap_spans(text: str, spans: list, counts: collections.Counter) -> list:
     return merged
 
 
+def text_sha(text: str) -> str:
+    """Key of a book text in book/rewrites.jsonl: a rewrite applies only to the exact text it was made from."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+BOOK_MARK_RE = re.compile(r"\[(\d+)\]")
+BOOK_NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def book_numbers(text: str) -> set:
+    """The numbers written in a text, without its [n] markers; "2,731" and "$2,731" are both "2731"."""
+    return {m.group().replace(",", "") for m in BOOK_NUM_RE.finditer(BOOK_MARK_RE.sub(" ", text or ""))}
+
+
+def book_markers(text: str) -> list:
+    """The [n] numbers of a text, each once, in order of first use."""
+    return list(dict.fromkeys(int(n) for n in BOOK_MARK_RE.findall(text or "")))
+
+
+def hook_problem(hook, text: str) -> str | None:
+    """Why a chapter hook may not be served next to `text` (its chapter paragraph), or None."""
+    if not isinstance(hook, str) or not hook.strip():
+        return "the hook is not a line of text"
+    n = len(hook.split())
+    if not HOOK_WORDS[0] <= n <= HOOK_WORDS[1]:
+        return f"the hook has {n} words; write {HOOK_WORDS[0]} to {HOOK_WORDS[1]}"
+    if "[" in hook or "]" in hook:
+        return "the hook carries square brackets; it has no citation numbers"
+    if "?" in hook:
+        return "the hook is a question; write a statement"
+    new = book_numbers(hook) - book_numbers(text)
+    if new:
+        return f"the hook has a number the paragraph does not state ({sorted(new)[0]})"
+    return None
+
+
+def beats_problem(beats, ns: set) -> str | None:
+    """Why a chapter's beats may not be served with the cite numbers `ns`, or None. A beat is {"text", "cites"}:
+    at most BEAT_WORDS words before its markers, ending with them, citing only `ns`, `cites` = its markers."""
+    if not isinstance(beats, list) or not BEAT_COUNT[0] <= len(beats) <= BEAT_COUNT[1]:
+        return f"write {BEAT_COUNT[0]} to {BEAT_COUNT[1]} beats"
+    for i, b in enumerate(beats, 1):
+        if not isinstance(b, dict) or not isinstance(b.get("text"), str) or not isinstance(b.get("cites"), list):
+            return f"beat {i} is not an object with text and cites"
+        t = b["text"]
+        n = len(BOOK_MARK_RE.sub(" ", t).split())
+        if n > BEAT_WORDS:
+            return f"beat {i} has {n} words before its citation numbers; at most {BEAT_WORDS}"
+        if "[" in BOOK_MARK_RE.sub("", t) or "]" in BOOK_MARK_RE.sub("", t):
+            return f"beat {i} carries square brackets that are not citation numbers"
+        marks = book_markers(t)
+        if not marks or not re.search(r"(?:\[\d+\])+[.!?]?$", t.strip()):
+            return f"beat {i} does not end with its citation numbers"
+        bad = [m for m in marks if m not in ns]
+        if bad:
+            return f"beat {i} cites [{bad[0]}], which the paragraph does not cite"
+        if b["cites"] != marks:
+            return f"beat {i}: cites {b['cites']} are not the numbers in its text {marks}"
+    return None
+
+
+def figure_problem(fig, ns: set, text: str) -> str | None:
+    """Why a chapter figure may not be served next to `text` with the cite numbers `ns`, or None (null is fine)."""
+    if fig is None:
+        return None
+    if not isinstance(fig, dict) or not all(isinstance(fig.get(k), str) for k in ("value", "label")) \
+            or not isinstance(fig.get("cites"), list):
+        return "the figure is not null or an object with value, label and cites"
+    v, label = fig["value"], fig["label"]
+    if not 0 < len(v) <= FIGURE_VALUE_CHARS or not re.search(r"\d", v):
+        return f"the figure value must be a number as written, at most {FIGURE_VALUE_CHARS} characters"
+    if not book_numbers(v) <= book_numbers(text):
+        return "the figure value is not a number the paragraph states in digits"
+    if not 0 < len(label.split()) <= FIGURE_LABEL_WORDS or label.rstrip().endswith("."):
+        return f"the figure label must be 1 to {FIGURE_LABEL_WORDS} words with no full stop"
+    if any(c in v + label for c in "[]"):
+        return "the figure carries square brackets"
+    if not fig["cites"] or not all(type(n) is int and n in ns for n in fig["cites"]):
+        return "the figure cites must be one or more numbers the paragraph cites"
+    return None
+
+
+def day_pairs(edges: list) -> dict:
+    """{day: [(a, b, w)]}: the day's PAIR_TOP strongest talking pairs exactly as the book page picks them
+    (web/src/book/scene.ts pairsOf): over the served interaction edges in their served order, both directions folded
+    into one unordered pair (a < b), the day's weights summed, a stable sort by weight, the first PAIR_TOP."""
+    per = collections.defaultdict(dict)
+    for e in edges:
+        src, dst = e.get("from"), e.get("to")
+        if src == dst:
+            continue
+        key = (src, dst) if src < dst else (dst, src)
+        seen = set()
+        for d, n in e.get("by_day") or []:
+            if d in seen:  # the page takes the first entry for a day
+                continue
+            seen.add(d)
+            per[d][key] = per[d].get(key, 0) + n
+    return {d: [(a, b, w) for (a, b), w in sorted(p.items(), key=lambda kv: -kv[1])[:PAIR_TOP]]
+            for d, p in per.items()}
+
+
+def pair_key(day: int, a: str, b: str) -> tuple:
+    return (day, *sorted((a, b)))
+
+
+def pick_pairs(recs) -> dict:
+    """{(day, a, b): record} from book/pairs.jsonl records: per pair the last line with a text, else the last line."""
+    out = {}
+    for r in recs:
+        if not (isinstance(r, dict) and type(r.get("day")) is int and isinstance(r.get("a"), str)
+                and isinstance(r.get("b"), str)):
+            continue
+        key = pair_key(r["day"], r["a"], r["b"])
+        if isinstance(r.get("text"), str) or not isinstance((out.get(key) or {}).get("text"), str):
+            out[key] = r
+    return out
+
+
+def pair_problem(text) -> str | None:
+    """Why a pair sentence may not be served, or None: PAIR_WORDS words, one plain statement ending with a full
+    stop, no square brackets (so no chip and no citation marker), no quotation, no dash."""
+    if not isinstance(text, str) or not text.strip():
+        return "the sentence is not a line of text"
+    n = len(text.split())
+    if not PAIR_WORDS[0] <= n <= PAIR_WORDS[1]:
+        return f"the sentence has {n} words; write {PAIR_WORDS[0]} to {PAIR_WORDS[1]}"
+    if "[" in text or "]" in text:
+        return "the sentence carries square brackets"
+    if any(c in text for c in "\"“”"):
+        return "the sentence quotes; say it in plain words"
+    if "—" in text or "–" in text or " - " in text:
+        return "the sentence has a dash; use a comma"
+    if "?" in text:
+        return "the sentence is a question; write a statement"
+    if not text.rstrip().endswith("."):
+        return "the sentence does not end with a full stop"
+def stage_key(beats) -> str:
+    """The hash of a chapter's beats as cached (book.py hooks), so a stage made for other beats never applies."""
+    return text_sha("\n".join(b.get("text") or "" if isinstance(b, dict) else "" for b in beats or []))
+
+
+def stage_label_problem(label, text: str) -> str | None:
+    """Why a prop or moment label may not be served next to `text` (its chapter paragraph), or None (null is fine)."""
+    if label is None:
+        return None
+    if not isinstance(label, str) or not label.strip():
+        return "a label is a short text or null"
+    n = len(label.split())
+    if n > STAGE_LABEL_WORDS:
+        return f"the label {label!r} has {n} words; at most {STAGE_LABEL_WORDS}, or null"
+    if len(label) > STAGE_LABEL_CHARS:
+        return f"the label {label!r} is over {STAGE_LABEL_CHARS} characters"
+    if any(c in label for c in '[]"'):
+        return f"the label {label!r} carries square brackets or quotes"
+    new = book_numbers(label) - book_numbers(text)
+    if new:
+        return f"the label {label!r} has a number the paragraph does not state ({sorted(new)[0]})"
+    return None
+
+
+def stage_problem(stage, beats: int, agents: set, text: str) -> str | None:
+    """Why a chapter's stage direction may not be served beside `text`, its `beats` (how many) and its active
+    `agents`, or None (null is fine). {"props": 1 to 3 {"kind", "label"}, "moments": 0 to 6 {"beat", "kind",
+    "agents", "label"}}: kinds from the catalogue, a beat index among the chapter's beats, agents among its own."""
+    if stage is None:
+        return None
+    if not isinstance(stage, dict) or not isinstance(stage.get("props"), list) \
+            or not isinstance(stage.get("moments"), list) or set(stage) != {"props", "moments"}:
+        return "the stage is not null or an object with exactly props and moments"
+    props, moments = stage["props"], stage["moments"]
+    if not STAGE_PROP_COUNT[0] <= len(props) <= STAGE_PROP_COUNT[1]:
+        return f"give {STAGE_PROP_COUNT[0]} to {STAGE_PROP_COUNT[1]} props"
+    for i, p in enumerate(props, 1):
+        if not isinstance(p, dict) or set(p) != {"kind", "label"}:
+            return f"prop {i} is not an object with exactly kind and label"
+        if p["kind"] not in STAGE_PROPS:
+            return f"prop {i} kind {p['kind']!r} is not one of {', '.join(STAGE_PROPS)}"
+        why = stage_label_problem(p["label"], text)
+        if why:
+            return f"prop {i}: {why}"
+    if len(moments) > STAGE_MOMENT_MAX:
+        return f"give at most {STAGE_MOMENT_MAX} moments"
+    for i, m in enumerate(moments, 1):
+        if not isinstance(m, dict) or set(m) != {"beat", "kind", "agents", "label"}:
+            return f"moment {i} is not an object with exactly beat, kind, agents and label"
+        if m["kind"] not in STAGE_MOMENTS:
+            return f"moment {i} kind {m['kind']!r} is not one of {', '.join(STAGE_MOMENTS)}"
+        if type(m["beat"]) is not int or not 0 <= m["beat"] < beats:
+            return f"moment {i} beat {m['beat']!r} is not a beat number from 0 to {beats - 1}"
+        ids = m["agents"]
+        if not isinstance(ids, list) or len(ids) > STAGE_AGENTS_MAX or len(set(map(str, ids))) != len(ids):
+            return f"moment {i} agents must be a list of at most {STAGE_AGENTS_MAX} different agent ids"
+        bad = [a for a in ids if a not in agents]
+        if bad:
+            return f"moment {i} agent {bad[0]!r} is not an agent of this chapter"
+        why = stage_label_problem(m["label"], text)
+        if why:
+            return f"moment {i}: {why}"
+    return None
+
+
+def book_chapters(days: list, goals: list) -> tuple:
+    """The book's chapters: one per village goal that has days, in goal order. A day joins the chapter whose
+    `goal` equals its `village_goal` exactly; a day without one joins the chapter of the day before it (the
+    first chapter when no day is before it). Returns ([{"n", "goal", "days": [day records]}], days attached)."""
+    order = {g["goal"]: i for i, g in enumerate(goals) if g.get("goal")}
+    members = collections.defaultdict(list)
+    cur, lead, attached = None, [], 0
+    for d in sorted(days, key=lambda r: r["day"]):
+        i = order.get(d.get("village_goal"))
+        if i is None:
+            attached += 1
+            if cur is None:
+                lead.append(d)
+                continue
+            i = cur
+        cur = i
+        members[i].append(d)
+    if lead and members:
+        first = min(members)
+        members[first] = lead + members[first]
+    chapters = [{"n": k + 1, "goal": goals[i]["goal"], "days": members[i]} for k, i in enumerate(sorted(members))]
+    return chapters, attached
+
+
 # ---------------------------------------------------------------- the build
 
 class Builder:
@@ -1297,6 +1690,8 @@ class Builder:
         extra_ids = load_extra_ids(self.extra_ids_path)
         self.rules_path = self.args.rules or os.path.join(m, RULES)
         self.rules = load_rules(self.rules_path)
+        self.context_path = self.args.context_handles or os.path.join(m, CONTEXT_HANDLES)
+        self.rules["context"] = load_context_handles(self.context_path)
         self.names = Names(self.agents, human_names, zipf=load_zipf(self.args.common_words), extra_ids=extra_ids,
                            rules=self.rules)
         self.stats.counts["human_names_loaded"] = len(human_names)
@@ -1347,6 +1742,7 @@ class Builder:
                     self.cited.add(c["ref"])
         self.load_summary_tags()
         self.load_findings()
+        self.load_book()
 
     def load_summary_tags(self):
         """oneiroNER spans over summary text (tags/tags-summaries.jsonl), word-snapped; optional."""
@@ -1408,6 +1804,243 @@ class Builder:
                 else:
                     self.stats.warnings["findings: bad cite (dropped)"] += 1
             self.findings.append({"title": f["title"], "body": f["body"], "cites": cites, "view": f.get("view")})
+
+    def load_book(self):
+        """book/*.jsonl from pipeline/book (optional): day paragraphs, chapter stories, goal adherence. The last
+        line per key wins; cited refs get sources like any summary's."""
+        self.book = None
+        d = self.args.book or os.path.join(self.root, "book")
+        if not os.path.exists(os.path.join(d, "days.jsonl")):
+            return
+        book = {"days": {}, "chapters": {}, "adherence": {}}
+        for name, key in (("days", "day"), ("chapters", "n"), ("adherence", "id")):
+            path = os.path.join(d, f"{name}.jsonl")
+            for r in iter_jsonl([path] if os.path.exists(path) else [], self.stats, f"book/{name}"):
+                if isinstance(r, dict) and r.get(key) is not None:
+                    book[name][r[key]] = r
+        for r in list(book["days"].values()) + list(book["chapters"].values()):
+            if not isinstance(r.get("text"), str) or not isinstance(r.get("cites"), list):
+                self.stats.warnings["book: bad record (skipped)"] += 1
+                book["days" if "day" in r else "chapters"].pop(r.get("day", r.get("n")), None)
+                continue
+            r["cites"] = [c for c in r["cites"] if isinstance(c, dict) and isinstance(c.get("n"), int)
+                          and isinstance(c.get("ref"), str) and isinstance(c.get("day"), int)]
+            self.cited.update(c["ref"] for c in r["cites"])
+        # accepted rewordings of sentences the redaction would cut (book.py rephrase), keyed by their source text
+        book["rewrites"] = {}
+        path = os.path.join(d, "rewrites.jsonl")
+        for r in iter_jsonl([path] if os.path.exists(path) else [], self.stats, "book/rewrites"):
+            if isinstance(r, dict) and r.get("accepted") and isinstance(r.get("text"), str):
+                book["rewrites"][(r.get("unit"), r.get("field"), r.get("src"))] = r["text"]
+        # the scroll fields per chapter (book.py hooks), keyed by the chapter text they were written from
+        book["hooks"] = {}
+        path = os.path.join(d, "hooks.jsonl")
+        for r in iter_jsonl([path] if os.path.exists(path) else [], self.stats, "book/hooks"):
+            if isinstance(r, dict) and isinstance(r.get("n"), int) and isinstance(r.get("src"), str):
+                book["hooks"][(r["n"], r["src"])] = r
+        # one sentence per talking pair per day (book.py pairs); None when the step has not run
+        path = os.path.join(d, "pairs.jsonl")
+        book["pairs"] = pick_pairs(iter_jsonl([path], self.stats, "book/pairs")) if os.path.exists(path) else None
+        for r in (book["pairs"] or {}).values():
+            if isinstance(r.get("text"), str) and isinstance(r.get("cites"), list):
+                self.cited.update(c for c in r["cites"] if isinstance(c, str))
+        # the stage direction per chapter (book.py stage), keyed by the chapter text and the beats it was made from
+        book["stage"] = {}
+        path = os.path.join(d, "stage.jsonl")
+        for r in iter_jsonl([path] if os.path.exists(path) else [], self.stats, "book/stage"):
+            if isinstance(r, dict) and isinstance(r.get("n"), int) and isinstance(r.get("src"), str) \
+                    and isinstance(r.get("beats_src"), str):
+                book["stage"][(r["n"], r["src"], r["beats_src"])] = r
+        self.book = book
+
+    def chapter_stage(self, s: dict | None, text: str | None, beats, agents: list,
+                      counts: collections.Counter) -> dict | None:
+        """The stage direction of a served chapter: each label redacted (a label the redaction would change gets
+        null), the whole kept only when it passes `stage_problem` beside the served text, beats and agents."""
+        if not s or text is None or s.get("stage") is None:
+            counts["stage_null" if s and text is not None else "stage_missing"] += 1
+            return None
+        names = self.names
+
+        def label(x):
+            if not isinstance(x, str):
+                return x
+            red = redact_plain(x, names)
+            if red != x:
+                counts["stage_labels_dropped"] += 1
+                return None
+            return x
+        st = s["stage"]
+        try:
+            out = {"props": [{"kind": p["kind"], "label": label(p["label"])} for p in st["props"]],
+                   "moments": [{"beat": m["beat"], "kind": m["kind"], "agents": list(m["agents"]),
+                                "label": label(m["label"])} for m in st["moments"]]}
+        except (KeyError, TypeError):
+            out = st
+        why = stage_problem(out, len(beats) if isinstance(beats, list) else 0, set(agents), text)
+        counts["stage_dropped" if why else "stage"] += 1
+        if not why:
+            counts["stage_moments"] += len(out["moments"])
+        return None if why else out
+
+    def chapter_scroll(self, unit: str, h: dict | None, text: str | None, cites: list,
+                       counts: collections.Counter) -> dict:
+        """hook, beats and figure of a served chapter: each after its accepted rewrites and the redaction, kept
+        only when it still passes the rules beside the served text and cites (else null, counted)."""
+        out = {"hook": None, "beats": None, "figure": None}
+        if not h or text is None:
+            return out
+        names, hits = self.names, self.names.hits
+        ns = {c["n"] for c in cites}
+        if h.get("hook") is not None:
+            hook = redact_plain(self.book_text(unit, "hook", h["hook"], counts), names)
+            why = hook_problem(hook, text)
+            counts["hooks_dropped" if why else "hooks"] += 1
+            out["hook"] = None if why else hook
+        if h.get("beats") is not None:
+            beats = []
+            for i, b in enumerate(h["beats"] if isinstance(h["beats"], list) else []):
+                t = b.get("text") if isinstance(b, dict) else None
+                if isinstance(t, str):
+                    t = strip_unbound(redact_plain(self.book_text(unit, f"beat:{i + 1}", t, counts), names), ns, hits)
+                    beats.append({"text": t, "cites": book_markers(t)})
+            why = beats_problem(beats, ns)
+            counts["beats_dropped" if why else "beats"] += 1
+            out["beats"] = None if why else beats
+        f = h.get("figure")
+        if isinstance(f, dict):
+            label = redact_plain(self.book_text(unit, "figure_label", f.get("label"), counts), names)
+            fig = {"value": f.get("value"), "label": label, "cites": [n for n in f.get("cites") or [] if n in ns]}
+            why = figure_problem(fig, ns, text)
+            counts["figures_dropped" if why else "figures"] += 1
+            out["figure"] = None if why else fig
+        return out
+
+    def book_text(self, unit: str, field: str, text: str | None, counts: collections.Counter) -> str | None:
+        """The text after its accepted rewrites (each made from the exact text before it)."""
+        for _ in range(4):
+            if text is None:
+                break
+            new = self.book["rewrites"].get((unit, field, text_sha(text)))
+            if new is None:
+                break
+            counts["rewrites_applied"] += 1
+            text = new
+        return text
+
+    def assemble_book(self, days: list, goals: list, per_agent: dict, add_source, edges: list | None = None) -> dict:
+        """data/book.json, data/pairs.json, data/adherence/<agent>.json and data/talk/<agent>.json. Every text, title and note is new
+        text without oneiroNER spans, so it gets the untagged rules (capitalized common-word names included) and the
+        validator checks it as untagged; book.py rephrase rewords sentences where that would cut a plain word.
+        A cite whose ref has no source is dropped with its [n]."""
+        names, hits = self.names, self.names.hits
+        files, counts = {}, collections.Counter()
+
+        def cited(text, cites):
+            keep = []
+            for c in cites:
+                if add_source(c["day"], c["ref"]):
+                    keep.append({"n": c["n"], "ref": c["ref"], "day": c["day"]})
+                else:
+                    counts["cites_dropped_unknown_ref"] += 1
+            text = strip_unbound(redact_plain(text, names), {c["n"] for c in keep}, hits)
+            return text, keep
+
+        chapters, attached = book_chapters(days, goals)
+        chapter_of = {d["day"]: c["n"] for c in chapters for d in c["days"]}
+        if self.book is not None:
+            series_chat = self.series.get("chat", {}).get("human", collections.Counter())
+            out_days = []
+            for d in days:
+                r = self.book["days"].get(d["day"])
+                text, cites = cited(self.book_text(f"day:{d['day']}", "text", r["text"], counts),
+                                    r["cites"]) if r else (None, [])
+                counts["days_with_text"] += text is not None
+                out_days.append({"day": d["day"], "date": d["date"], "chapter": chapter_of.get(d["day"]),
+                                 "text": text, "cites": cites})
+            out_chapters = []
+            for c in chapters:
+                r = self.book["chapters"].get(c["n"])
+                if r is not None and r.get("goal") != c["goal"]:
+                    counts["chapters_goal_mismatch"] += 1
+                    r = None
+                unit = f"chapter:{c['n']}"
+                text, cites = cited(self.book_text(unit, "text", r["text"], counts), r["cites"]) if r else (None, [])
+                title = self.book_text(unit, "title", r.get("title"), counts) if r else None
+                h = self.book["hooks"].get((c["n"], text_sha(r["text"]))) if r else None
+                scroll = self.chapter_scroll(unit, h, text, cites, counts)
+                cd = c["days"]
+                active = sorted({a for d in cd for a in d["active_agents"]} - {"human"})
+                st = self.book["stage"].get((c["n"], text_sha(r["text"]), stage_key((h or {}).get("beats")))) \
+                    if r else None
+                stage = self.chapter_stage(st, text, scroll["beats"], active, counts)
+                out_chapters.append({
+                    "n": c["n"], "goal": c["goal"], "title": redact_plain(title, names) if r else None,
+                    "first_day": cd[0]["day"], "last_day": cd[-1]["day"],
+                    "first_date": cd[0]["date"], "last_date": cd[-1]["date"],
+                    "days": [d["day"] for d in cd], "agents": active,
+                    "stats": {"days": len(cd), "chat": sum(d["counts"]["chat"] for d in cd),
+                              "sessions": sum(d["counts"]["sessions"] for d in cd),
+                              "memories": sum(d["counts"]["memories"] for d in cd),
+                              "human_chat": sum(series_chat.get(d["day"], 0) for d in cd), "agents": len(active)},
+                    "text": text, "cites": cites, **scroll, "stage": stage})
+                counts["chapters_with_text"] += text is not None
+            files["book.json"] = {"schema": BOOK_SCHEMA,
+                                  "generated": self.args.generated or iso(dt.datetime.now(dt.timezone.utc).isoformat()),
+                                  "model": SUMMARIZER, "chapters": out_chapters, "days": out_days}
+            scores = collections.Counter()
+            for agent, recs in sorted(per_agent.items()):
+                rows = []
+                for rec in recs:
+                    a = self.book["adherence"].get(rec["id"])
+                    score = a.get("score") if a and a.get("score") in BOOK_SCORES else None
+                    note = (redact_plain(self.book_text(f"adherence:{rec['id']}", "note", a["note"], counts), names)
+                            if score and isinstance(a.get("note"), str) else None)
+                    scores[score] += 1
+                    rows.append({"day": rec["day"], "chapter": chapter_of.get(rec["day"]), "score": score, "note": note})
+                files[f"adherence/{agent}.json"] = {"agent": agent, "days": rows}
+            counts["adherence"] = {str(k): v for k, v in scores.most_common()}
+        # talk partners: per agent per day, the top partners by interaction weight, both directions
+        talk = collections.defaultdict(lambda: collections.defaultdict(collections.Counter))
+        for (src, dst), ed in self.edges.items():
+            for d, n in ed["by_day"].items():
+                if n:
+                    talk[src][d][dst] += n
+                    talk[dst][d][src] += n
+        for agent in sorted(talk):
+            rows = [{"day": d, "partners": [[p, n] for p, n in sorted(per.items(), key=lambda kv: (-kv[1], kv[0]))
+                                            [:TALK_TOP]]} for d, per in sorted(talk[agent].items())]
+            files[f"talk/{agent}.json"] = {"agent": agent, "days": rows}
+        # pairs.json: per day the talking pairs the page draws (day_pairs over the served edges), each with its
+        # sentence after the accepted rewrites and the redaction, kept only when it passes pair_problem and keeps a cite
+        if self.book is not None and self.book.get("pairs") is not None and edges is not None:
+            top, out_pairs = day_pairs(edges), {}
+            for d in days:
+                rows = []
+                for a, b, w in top.get(d["day"], []):
+                    r = self.book["pairs"].get(pair_key(d["day"], a, b))
+                    text, cites = None, []
+                    if r is not None and isinstance(r.get("text"), str):
+                        t = redact_plain(self.book_text(f"pair:{d['day']}:{a}:{b}", "text", r["text"], counts), names)
+                        refs = [c for c in r.get("cites") or [] if isinstance(c, str) and PAIR_REF_RE.match(c)]
+                        if pair_problem(t) is None and refs:
+                            for ref in refs:
+                                if add_source(d["day"], ref):
+                                    cites.append({"n": len(cites) + 1, "ref": ref, "day": d["day"]})
+                                else:
+                                    counts["pairs_cites_dropped_unknown_ref"] += 1
+                            text = t if cites else None
+                            cites = cites if text else []
+                        counts["pairs_dropped" if text is None else "pairs_with_text"] += 1
+                    rows.append({"a": a, "b": b, "w": w, "text": text, "cites": cites})
+                    counts["pairs"] += 1
+                out_pairs[str(d["day"])] = rows
+            files["pairs.json"] = {"schema": PAIRS_SCHEMA,
+                                   "generated": self.args.generated or iso(dt.datetime.now(dt.timezone.utc).isoformat()),
+                                   "model": SUMMARIZER, "days": out_pairs}
+        counts.update({"chapters": len(chapters), "days_without_goal_attached": attached, "talk_agents": len(talk)})
+        self.stats.counts["book"] = dict(counts)
+        return files
 
     # ---- pass 1: slice
 
@@ -2132,6 +2765,7 @@ class Builder:
                             "mood": {"days": mood_days, "agents": dict(mood_agents)}}}
 
         files = {"bundle.json": bundle}
+        files.update(self.assemble_book(days, goals, per_agent, add_source, edges))
         if findings is not None:
             files["findings.json"] = findings
         if self.args.village_layout == "per-day":
@@ -2242,7 +2876,8 @@ class Builder:
             import validate_bundle
             v = validate_bundle.validate(tmp, self.args.meta or self.meta_dir, zipf=self.names.zipf,
                                          untagged=self.untagged, human_names=self.args.human_names,
-                                         extra_ids=self.extra_ids_path, rules=self.rules_path)
+                                         extra_ids=self.extra_ids_path, rules=self.rules_path,
+                                         context_handles=self.context_path)
             self.validation_errors = v.errors
             if v.errors:
                 failed = os.path.join(parent, "failed")
@@ -2271,7 +2906,7 @@ class Builder:
         return sizes
 
 
-def main(argv=None):
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", default=DEFAULT_ROOT, help="work area holding meta/ slice/ tags/ summaries/")
     ap.add_argument("--meta")
@@ -2284,8 +2919,10 @@ def main(argv=None):
     ap.add_argument("--human-names", help="JSON list of human display names to redact (default meta/human_names.json)")
     ap.add_argument("--extra-human-ids", help="JSON list of human usernames/handles to redact (default meta/extra_human_ids.json)")
     ap.add_argument("--rules", help="identifier rule file (default meta/extra_human_rules.json)")
+    ap.add_argument("--context-handles", help="handles cut only in handle context (default meta/context_handles.json)")
     ap.add_argument("--common-words", help="JSON {word: zipf} instead of the wordfreq package (tests)")
     ap.add_argument("--findings", help="findings JSON (default <root>/findings/findings.json; optional)")
+    ap.add_argument("--book", help="book cache dir from pipeline/book (default <root>/book; optional)")
     ap.add_argument("--top-entities", type=int, default=TOP_ENTITIES)
     ap.add_argument("--budget", type=int, default=BUNDLE_BUDGET, help="max bytes of bundle.json; entities are trimmed to fit")
     ap.add_argument("--village-layout", choices=("per-day", "single"), default="per-day",
@@ -2295,7 +2932,11 @@ def main(argv=None):
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--no-validate", dest="validate", action="store_false",
                     help="swap the new bundle in without running validate_bundle.py on it first")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
 
     b = Builder(args)
     try:

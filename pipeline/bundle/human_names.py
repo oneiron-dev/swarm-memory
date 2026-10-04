@@ -3,7 +3,8 @@
 
 The list is pipeline-internal: never committed, never served. build_bundle.py uses it only to replace
 those names with [human] in the text it serves. Sources: USER_TALK speakerName, USER_NAME_CHANGE
-oldName/newName, OUTREACH_* recipient (the name part; email addresses are redacted by pattern anyway).
+oldName/newName, OUTREACH_* recipient (the name part; email addresses are redacted by pattern anyway), plus
+the reviewed names in meta/human_names_reviewed.json (names found by privacy sweeps; kept across reruns).
 Prints counts only.
 """
 from __future__ import annotations
@@ -47,7 +48,12 @@ def main(argv=None):
     ap.add_argument("--dataset", default=DATASET)
     ap.add_argument("--out", default="/home/lexi/calc-nvme/hackathon-20261004/meta/human_names.json")
     args = ap.parse_args(argv)
-    names = sorted(names_from_events(os.path.join(args.dataset, "events.jsonl.gz")))
+    names = names_from_events(os.path.join(args.dataset, "events.jsonl.gz"))
+    reviewed = os.path.join(os.path.dirname(args.out), "human_names_reviewed.json")
+    if os.path.exists(reviewed):
+        with open(reviewed) as f:
+            names |= {" ".join(n.split()) for n in json.load(f) if isinstance(n, str) and n.strip()}
+    names = sorted(names)
     tmp = args.out + ".tmp"
     with open(tmp, "w") as f:
         json.dump(names, f, ensure_ascii=False)

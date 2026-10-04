@@ -184,7 +184,7 @@ export function Timeline({ idx, route }: { idx: Index; route: Route }) {
           <Picks label="series" value={metric} options={METRICS} onPick={setMetric} />
         </div>
         {metric === 'mentions' ? (
-          <p class="quiet" style={{ fontSize: '14px', marginBottom: '10px' }}>Entity mentions found by oneiroNER, all labels together.</p>
+          <p class="quiet" style={{ fontSize: '14px', marginBottom: '10px' }}>Entity mentions found by our tagger, all labels together.</p>
         ) : (
           <div style={{ marginBottom: '10px' }}><Legend /></div>
         )}

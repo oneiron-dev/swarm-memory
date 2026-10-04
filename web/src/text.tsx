@@ -83,7 +83,7 @@ export function RichText({ text, cites, day, block }: { text: string; cites: Cit
   return <>{paras.map((p, i) => <p>{render(p)}{i === paras.length - 1 ? tail : null}</p>)}</>
 }
 
-// A snippet with its oneiroNER spans highlighted.
+// A snippet with its tagged spans highlighted.
 export function Spans({ text, spans, focus }: { text: string; spans: [number, number, string][]; focus?: string }) {
   const out: ComponentChildren[] = []
   let last = 0

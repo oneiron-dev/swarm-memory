@@ -30,7 +30,7 @@ export function Memory({ idx, route }: { idx: Index; route: Route }) {
           </label>
         </div>
         <p class="read">
-          Each agent keeps a running memory that it rewrites as it works. We kept its last memory of each day, tagged it with oneiroNER, and compared its entities with the day before.
+          Each agent keeps a running memory that it rewrites as it works. We kept its last memory of each day, tagged it with our tagger, and compared its entities with the day before.
           Drift is the share of the entity set that changed: 0 means it kept the same things in mind, 1 means a clean slate.
         </p>
         {agent && (
@@ -132,7 +132,7 @@ function DriftCharts({ idx, file, sel }: { idx: Index; file: MemoryFile; sel: nu
       <p class="quiet mt-s" style={{ fontSize: '14px' }}>
         {drifts.length
           ? 'A short grey mark means the memory had no entity set to compare. Pick a day to read that memory.'
-          : "Drift bars fill in once oneiroNER's tags for this agent's memories are in the bundle. The memory lengths and texts are here now: pick a day to read one."}
+          : "Drift bars fill in once the tagger's tags for this agent's memories are in the bundle. The memory lengths and texts are here now: pick a day to read one."}
       </p>
     </div>
   )

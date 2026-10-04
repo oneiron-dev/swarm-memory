@@ -7,6 +7,7 @@ Usage: python make_fixtures.py <root> [--no-tags] [--no-summaries] [--no-finding
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 
@@ -37,6 +38,8 @@ AGENT_GOALS = [{"agent": "agent-alpha", "name": "Bake", "short_name": "bake",
 HUMAN_NAMES = ["Zed Quill", "quill_77", "Hello", "a", "Oven", "vexa", "Will", "Brenna"]
 # usernames / handles of fake contributors that are no display name (meta/extra_human_ids.json)
 EXTRA_IDS = ["zzq-prober-dev", "zzq-prober"]
+# meta/context_handles.json: a fake contributor's handle that is also an English word (cut only in handle context)
+CONTEXT_HANDLES = ["pebble"]
 # meta/extra_human_rules.json (its per-location rule is added in build, where the row id is known)
 RULES = {"exact": ["Moss"], "ids": ["QZ555000"], "drop_entities": ["almanac"], "profile_allow": ["zzq-org"]}
 # English zipf frequencies for the fixture words (stands in for the wordfreq package); absent words are 0
@@ -111,7 +114,7 @@ def spans_for(text, items):
     return out
 
 
-def build(root, tags=True, summaries=True, findings=True):
+def build(root, tags=True, summaries=True, findings=True, book=True):
     for sub in ("meta", "slice", "tags", "summaries"):
         os.makedirs(os.path.join(root, sub), exist_ok=True)
 
@@ -126,6 +129,7 @@ def build(root, tags=True, summaries=True, findings=True):
     dump("meta/agent_goals.json", AGENT_GOALS)
     dump("meta/human_names.json", HUMAN_NAMES)
     dump("meta/extra_human_ids.json", EXTRA_IDS)
+    dump("meta/context_handles.json", CONTEXT_HANDLES)
     dump("common_words.json", COMMON_WORDS)
 
     slices = {}
@@ -251,6 +255,61 @@ def build(root, tags=True, summaries=True, findings=True):
             {"title": "Store day", "body": "Orders came in [1].", "cites": [{"n": 1, "ref": chat_ids[14], "day": 4}],
              "view": None},
             {"title": "Broken", "cites": []}])
+    if book:  # pipeline/book's cache: day paragraphs, chapter stories, goal adherence
+        os.makedirs(os.path.join(root, "book"), exist_ok=True)
+        days = [{"day": 1, "text": "Agent Alpha planned the Moon Bakery with Zed Quill [1]. The agents asked Will for "
+                                   "help [1]. A ghost helped [2].",
+                 "cites": [{"n": 1, "ref": chat_ids[0], "day": 1}, {"n": 2, "ref": "chat:not-in-slice", "day": 1}]},
+                {"day": 2, "text": "Agent Beta 2.5 ordered the oven [1].", "cites": [{"n": 1, "ref": chat_ids[6], "day": 2}]},
+                {"day": 3, "text": "The record holds no summaries of this day.", "cites": [], "empty": True},
+                # book.py gaps, a later line for the same day: a paragraph from raw rows no summary cites
+                {"day": 3, "text": "Agent Alpha sent the recipe card [1].", "gap": True,
+                 "cites": [{"n": 1, "ref": chat_ids[9], "day": 3}]}]
+        chapters = [{"n": 1, "goal": VILLAGE_GOALS[0]["goal"], "title": "A Week With Will",
+                     "text": "The agents planned a bakery [1] and ordered 2 ovens [2]. They asked Will [1].",
+                     "cites": [{"n": 1, "ref": chat_ids[0], "day": 1}, {"n": 2, "ref": chat_ids[6], "day": 2}]},
+                    {"n": 2, "goal": "A goal that changed since", "title": "Stale", "text": "Old [1].",
+                     "cites": [{"n": 1, "ref": chat_ids[0], "day": 1}]}]
+        adherence = [{"id": "agent-day:agent-alpha:1", "agent": "agent-alpha", "day": 1, "score": "on",
+                      "note": "Asked Will and Zed Quill for help."},
+                     {"id": "agent-day:agent-beta-2-5:2", "agent": "agent-beta-2-5", "day": 2, "score": "maybe",
+                      "note": "Not a score."}]
+        def sha(text):  # build_bundle.text_sha
+            return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+        reworded = days[1]["text"].replace("ordered", "bought")
+        rewrites = [  # book.py rephrase: accepted rewordings apply in a chain, each to the exact text it came from
+            {"unit": "day:2", "field": "text", "src": sha(days[1]["text"]), "accepted": True, "text": reworded},
+            {"unit": "day:2", "field": "text", "src": sha(reworded), "accepted": True,
+             "text": reworded.replace("bought", "got")},
+            {"unit": "chapter:1", "field": "text", "src": sha(chapters[0]["text"]), "accepted": False, "text": None},
+            {"unit": "day:1", "field": "text", "src": sha("an older text"), "accepted": True, "text": "Stale [1]."}]
+        beat3 = "They asked Will for help [1]."
+        rewrites.append({"unit": "chapter:1", "field": "beat:3", "src": sha(beat3), "accepted": True,
+                         "text": "They asked a neighbour for help [1]."})
+        hooks = [  # book.py hooks: keyed by the chapter text they were made from; the last line per key wins
+            {"n": 1, "goal": chapters[0]["goal"], "src": sha("an older chapter text"), "hook": "Stale hook line "
+             "that no longer matches the text", "beats": None, "figure": None},
+            {"n": 1, "goal": chapters[0]["goal"], "src": sha(chapters[0]["text"]),
+             "hook": "Two pretend days, 2 ovens, and a bakery planned on the moon",
+             "beats": [{"text": "The agents planned a bakery [1].", "cites": [1]},
+                       {"text": "They ordered 2 ovens [2].", "cites": [2]}, {"text": beat3, "cites": [1]}],
+             "figure": {"value": "2", "label": "ovens ordered for the bakery", "cites": [2]}},
+            {"n": 2, "goal": chapters[1]["goal"], "src": sha(chapters[1]["text"]),
+             "hook": "A stale chapter keeps its hook out of the book", "beats": None, "figure": None}]
+        beats_src = sha("\n".join(b["text"] for b in hooks[1]["beats"]))  # build_bundle.stage_key
+        stage = [  # book.py stage: keyed by the chapter text and the beats they were made from; the last line wins
+            {"n": 1, "goal": chapters[0]["goal"], "src": sha(chapters[0]["text"]), "beats_src": sha("older beats"),
+             "stage": {"props": [{"kind": "garden", "label": None}], "moments": []}},
+            {"n": 1, "goal": chapters[0]["goal"], "src": sha(chapters[0]["text"]), "beats_src": beats_src,
+             "stage": {"props": [{"kind": "stall", "label": "moon bakery"}, {"kind": "mailbox", "label": "help from Will"}],
+                       "moments": [{"beat": 1, "kind": "build", "agents": ["agent-beta-2-5"], "label": "2 ovens"},
+                                   {"beat": 0, "kind": "gather", "agents": [], "label": None}]}},
+            {"n": 2, "goal": chapters[1]["goal"], "src": sha(chapters[1]["text"]), "beats_src": sha(""),
+             "stage": {"props": [{"kind": "press", "label": None}], "moments": []}}]
+        for name, rows in (("days", days), ("chapters", chapters), ("adherence", adherence), ("rewrites", rewrites),
+                           ("hooks", hooks), ("stage", stage)):
+            with open(os.path.join(root, f"book/{name}.jsonl"), "w") as f:
+                f.write("".join(json.dumps(r) + "\n" for r in rows))
     return {"chat_ids": chat_ids, "digest_daily_1": dig1["id"]}
 
 
@@ -260,5 +319,6 @@ if __name__ == "__main__":
     ap.add_argument("--no-tags", action="store_true")
     ap.add_argument("--no-summaries", action="store_true")
     ap.add_argument("--no-findings", action="store_true")
+    ap.add_argument("--no-book", action="store_true")
     a = ap.parse_args()
-    build(a.root, tags=not a.no_tags, summaries=not a.no_summaries, findings=not a.no_findings)
+    build(a.root, tags=not a.no_tags, summaries=not a.no_summaries, findings=not a.no_findings, book=not a.no_book)

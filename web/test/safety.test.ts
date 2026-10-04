@@ -5,7 +5,7 @@ import { nearestIndex } from '../src/chart'
 import { citeDay } from '../src/text'
 import { dateOf } from '../src/views/timeline'
 
-const HOME = { view: 'overview', arg: null, sub: null }
+const HOME = { view: 'book', arg: null, sub: null, sub2: null, sub3: null }
 
 describe('parse', () => {
   test('a malformed % escape falls back to the default route', () => {
@@ -13,8 +13,10 @@ describe('parse', () => {
     expect(parse('#%E0%A4%A')).toEqual(HOME)
   })
   test('a good hash still parses', () => {
-    expect(parse('#timeline/12')).toEqual({ view: 'timeline', arg: '12', sub: null })
-    expect(parse('#memory/agent-alpha/3')).toEqual({ view: 'memory', arg: 'agent-alpha', sub: '3' })
+    expect(parse('#timeline/12')).toEqual({ view: 'timeline', arg: '12', sub: null, sub2: null, sub3: null })
+    expect(parse('#memory/agent-alpha/3')).toEqual({ view: 'memory', arg: 'agent-alpha', sub: '3', sub2: null, sub3: null })
+    expect(parse('#book/agent:agent-alpha/12/305/agent-beta')).toEqual({ view: 'book', arg: 'agent:agent-alpha', sub: '12', sub2: '305', sub3: 'agent-beta' })
+    expect(parse('#overview')).toEqual({ view: 'overview', arg: null, sub: null, sub2: null, sub3: null })
   })
 })
 

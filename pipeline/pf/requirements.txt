@@ -1,0 +1,10 @@
+# Mac mini (`run`): the MLX port of openai/privacy-filter
+mlx==0.32.3
+mlx-lm==0.32.0
+mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings@9b28270be81211f2b8daed0041aec65ea5dc4b28
+numpy==2.5.3
+tokenizers==0.23.2
+huggingface_hub
+# Arch (`filter`, `classify`): the bundle builder's lists and rules
+orjson==3.12.0
+wordfreq==3.1.1

@@ -1,0 +1,53 @@
+/* The book's drawn furniture: lens glyphs, the mode switch, the figure, the mood strip.
+   Tokens come from .book; the fallbacks are the same values, so a piece still reads outside it. */
+
+.g-glyph { display: block; overflow: visible; }
+
+/* the mode switch: a quiet row of glyphs and the chosen word after it */
+.g-modes {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--serif, Georgia, serif); color: var(--ink-2, #3a362f);
+}
+.g-modes-row { display: flex; align-items: center; gap: 2px; }
+.g-mode {
+  appearance: none; -webkit-appearance: none; margin: 0; padding: 5px; border: 0; border-radius: 4px; background: none;
+  display: inline-flex; line-height: 0; cursor: pointer; color: var(--ink-3, #78715f);
+  transition: color 120ms ease; -webkit-tap-highlight-color: transparent;
+}
+.g-mode[aria-pressed="true"] { color: var(--ink, #1f1d1a); }
+@media (hover: hover) { .g-mode:hover { color: var(--ink, #1f1d1a); } }
+.g-mode:focus { outline: none; }
+.g-mode:focus-visible { outline: 1px solid var(--accent, #b7482a); outline-offset: 2px; }
+.g-mode:disabled { cursor: default; opacity: 0.4; }
+.g-modes-word { font-size: 15px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 7.5em; max-width: 16em; }
+.g-modes-pick {
+  appearance: none; -webkit-appearance: none; margin: 0; padding: 3px 2px 2px; border: 0; border-radius: 0;
+  border-bottom: 1px solid var(--rule, rgba(31, 29, 26, 0.14)); background: transparent;
+  font-family: var(--serif, Georgia, serif); font-size: 14px; line-height: 1.2; color: var(--ink-2, #3a362f);
+  max-width: 14em; cursor: pointer;
+}
+.g-modes-pick:focus, .g-modes-pick:focus-visible { outline: none; border-bottom-color: var(--accent, #b7482a); }
+/* fixed over a painting on a narrow screen, the row gets paper under it, like the old lens word did */
+@media (max-width: 979px) {
+  .g-modes { background: rgba(246, 241, 231, 0.9); border-radius: 999px; padding: 6px 10px; box-shadow: 0 0 0 1px var(--hair, rgba(31, 29, 26, 0.08)); }
+  .g-modes-word { max-width: 10em; }
+}
+@media (prefers-reduced-motion: reduce) { .g-mode { transition: none; } }
+
+/* the figure: a number in the serif, one pen rule under it, a small label; no box */
+.g-figure { display: inline-flex; flex-direction: column; align-items: flex-start; max-width: 100%; text-align: left; }
+.g-figure-top { display: inline-flex; flex-direction: column; align-items: stretch; max-width: 100%; }
+.g-figure-value {
+  font-family: var(--serif, Georgia, serif); font-size: 40px; font-weight: 400; line-height: 1.05;
+  color: var(--ink, #1f1d1a); font-variant-numeric: lining-nums;
+}
+/* width 0 + min-width 100%: the rule takes the value's width and never widens the figure itself */
+.g-figure-rule { display: block; width: 0; min-width: 100%; height: 6px; margin-top: 3px; overflow: visible; color: var(--ink-3, #78715f); }
+.g-figure-label { margin-top: 5px; font-family: var(--serif, Georgia, serif); font-size: 14px; line-height: 1.35; color: var(--ink-3, #78715f); }
+
+/* the mood strip */
+.g-strip { display: block; max-width: 100%; overflow: visible; }
+.g-strip-ink { fill: none; stroke: var(--ink-2, #3a362f); stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
+.g-strip-ink circle { fill: var(--ink-2, #3a362f); stroke: none; }
+.g-strip-hair { stroke: var(--ink-4, #a89f90); stroke-width: 1; stroke-opacity: 0.7; }
+.g-strip-mark { fill: var(--accent, #b7482a); }

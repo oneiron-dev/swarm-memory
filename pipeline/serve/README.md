@@ -1,16 +1,26 @@
 # pipeline/serve: the public server
 
-`serve.py` is a stdlib HTTP server on `127.0.0.1:8790`, published by Tailscale Funnel at https://arch.tail87c1d7.ts.net.
+`serve.py` is a stdlib HTTP server on `127.0.0.1:8790`. It serves `--data` (default `$SWARM_WORK/bundle/data`) and `--dist` (default `$SWARM_WORK/web-dist`; `--work <dir>` sets both). The web app reads `./data/` beside it.
+
+```bash
+export SWARM_WORK=$W
+python3 pipeline/serve/serve.py --check     # serve on a free port, fetch /api/health, / and /data/bundle.json, exit 0 only when all are good
+python3 pipeline/serve/serve.py             # http://127.0.0.1:8790/
+```
+
+`/api/health` answers 200 even with no bundle; look at its body: `"ok": true` only when `bundle.json` has a manifest, and `"dist": true` only when the app is built. `--check` checks both.
+
+Our own deployment (below) published it by Tailscale Funnel at https://arch.tail87c1d7.ts.net.
 
 | path | serves |
 |---|---|
-| `/` | `web-dist/` (the built frontend). A path without a file extension that is not a file falls back to `index.html`. `/assets/*` is cached for a year (Vite hashes the names); everything else is `no-cache`. Until `web-dist/index.html` exists, `/` is a placeholder page with the bundle counts and the line "Data: AI Digest / AI Village". |
+| `/` | `web-dist/` (the built frontend). A path without a file extension that is not a file falls back to `index.html`. `/assets/*` is cached for a year (Vite hashes the names); everything else is `no-cache`. Until `web-dist/index.html` exists, `/` is a placeholder page with the bundle counts and the manifest's credit line. |
 | `/data/...` | `bundle/data/`, read-only. JSON gets `Cache-Control: public, max-age=60`. Responses are gzipped when the client accepts gzip. |
 | `/api/health` | `{"ok", "generated", "counts", "dist"}` from `bundle.json`'s manifest. |
 
 Only GET and HEAD. Paths are decoded, normalised and resolved, symlinks included, and must stay inside their folder; the check runs on the final path of every read, including a directory's `index.html`, the SPA fallback and the manifest behind `/api/health`. Anything else returns 404 (tested in `tests/test_serve.py`).
 
-## Arch layout
+## Arch layout (our deployment)
 
 - code: `/home/lexi/calc-nvme/wt/swarm-serve/` (a git checkout of this repo)
 - frontend: `/home/lexi/calc-nvme/hackathon-20261004/web-dist/`

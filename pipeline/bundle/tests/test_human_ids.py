@@ -73,5 +73,65 @@ class Classify(unittest.TestCase):
         self.assertEqual(self.replies, [])
 
 
+class Hits(unittest.TestCase):
+    """hits must not read "0 hits" as clean while classify has batches left; write says how to start a review."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.work = os.path.join(self.tmp, "human_ids")
+        os.makedirs(self.work)
+        rows = [{"i": 1, "text": "Quill Fakename", "label": "PERSON", "count": 2, "aliases": [], "example": "x",
+                 "agent": None}]
+        with open(os.path.join(self.work, "candidates.jsonl"), "w") as f:
+            f.write("".join(json.dumps(r) + "\n" for r in rows))
+        self.quiet = contextlib.redirect_stdout(io.StringIO())
+        self.quiet.__enter__()
+
+    def tearDown(self):
+        self.quiet.__exit__(None, None, None)
+        shutil.rmtree(self.tmp)
+
+    def test_hits_refuses_until_classify_is_complete(self):
+        with self.assertRaises(SystemExit) as cm:
+            human_ids.main(["hits", "--root", self.tmp])
+        self.assertIn("classify finished 0 of 1", str(cm.exception))
+        human_ids.main(["hits", "--root", self.tmp, "--allow-incomplete"])  # the override still lists what exists
+        with open(os.path.join(self.work, "classified.jsonl"), "w") as f:
+            f.write(json.dumps({"batch": 0, "items": 1, "n_items": 1, "hits": [{"i": 1, "why": "a name"}],
+                                "model": "mock", "in": 0, "out": 0, "seconds": 0}) + "\n")
+        human_ids.main(["hits", "--root", self.tmp])
+        with open(os.path.join(self.work, "hits.json")) as f:
+            self.assertEqual(list(json.load(f)), ["h1"])
+        with open(os.path.join(self.work, "review-template.txt")) as f:
+            self.assertIn("h1 reject <reason>", f.read())
+
+    def test_write_without_a_review_file_says_how_to_make_one(self):
+        with open(os.path.join(self.work, "classified.jsonl"), "w") as f:
+            f.write(json.dumps({"batch": 0, "items": 1, "n_items": 1, "hits": [], "model": "mock", "in": 0,
+                                "out": 0, "seconds": 0}) + "\n")
+        human_ids.main(["hits", "--root", self.tmp])
+        with self.assertRaises(SystemExit) as cm:
+            human_ids.main(["write", "--root", self.tmp])
+        self.assertIn("review-template.txt", str(cm.exception))
+        open(os.path.join(self.work, "review.txt"), "w").close()  # no hits: an empty review is the review
+        human_ids.main(["write", "--root", self.tmp])
+        with open(os.path.join(self.tmp, "meta", "extra_human_ids.json")) as f:
+            self.assertEqual(json.load(f), [])
+
+
+    def test_redteam_without_a_leaks_file_says_a_clean_round_is_an_empty_one(self):
+        leaks = os.path.join(self.tmp, "redteam", "leaks.jsonl")
+        with self.assertRaises(SystemExit) as cm:
+            human_ids.main(["redteam", "--root", self.tmp, "--leaks", leaks])
+        self.assertIn(f"no leaks file at {leaks}", str(cm.exception))
+        self.assertIn("A clean round is an empty file", str(cm.exception))
+        os.makedirs(os.path.dirname(leaks))
+        open(leaks, "w").close()
+        with self.assertRaises(SystemExit) as cm:
+            human_ids.main(["redteam", "--root", self.tmp, "--leaks", leaks, "--review", leaks + ".review"])
+        self.assertIn("no --review file", str(cm.exception))
+        human_ids.main(["redteam", "--root", self.tmp, "--leaks", leaks])  # an empty round folds nothing
+
+
 if __name__ == "__main__":
     unittest.main()

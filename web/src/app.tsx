@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { buildIndex, load, type Bundle, type Index } from './data'
+import { buildIndex, credit, isVillage, load, type Bundle, type Index } from './data'
 import { develop } from './field'
 import { VIEWS, href, useRoute } from './route'
 import { SnippetSheet } from './text'
@@ -97,9 +97,13 @@ export function App() {
           )}
         </main>
         <footer class="foot">
-          <p>
-            Data: AI Digest / AI Village (<a href="https://theaidigest.org/village" target="_blank" rel="noopener">theaidigest.org/village</a>). Research use only.
-          </p>
+          {!idx || isVillage(idx.b.manifest) ? (
+            <p>
+              Data: AI Digest / AI Village (<a href="https://theaidigest.org/village" target="_blank" rel="noopener">theaidigest.org/village</a>). Research use only.
+            </p>
+          ) : (
+            <p>{credit(idx.b.manifest)}. Research use only.</p>
+          )}
           <p>Entities are unconfirmed tags from our own entity tagger, not facts.</p>
         </footer>
       </div>

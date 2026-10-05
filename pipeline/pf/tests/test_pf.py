@@ -158,5 +158,37 @@ class Write(unittest.TestCase):
             pf.cmd_write(argparse.Namespace(work=work, root=tmp, review=review, out=work))
             with open(os.path.join(meta, "pf_candidates.json")) as f:
                 self.assertEqual(json.load(f), ["Person Zed", "zzq-poster", "zzq@fake"])
+            with open(os.path.join(meta, "extra_human_ids.json")) as f:  # accepted ids join the list the build reads
+                self.assertEqual(json.load(f), ["Person Zed", "zzq-poster", "zzq@fake"])
+        finally:
+            shutil.rmtree(tmp)
+
+
+class Review(unittest.TestCase):
+    def test_review_refuses_while_candidates_are_unclassified(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            work = os.path.join(tmp, "pf")
+            os.makedirs(work)
+            with open(os.path.join(work, "candidates.jsonl"), "w") as f:
+                f.write(json.dumps({"i": 1, "text": "Quill Fakename", "label": "private_person", "count": 1,
+                                    "aliases": [], "example": "x"}) + "\n")
+            with self.assertRaises(SystemExit) as cm:
+                pf.main(["review", "--root", tmp])
+            self.assertIn("never classified", str(cm.exception))
+            pf.main(["review", "--root", tmp, "--allow-incomplete"])
+            round1 = os.path.join(work, "luna")
+            os.makedirs(round1)
+            with open(os.path.join(round1, "candidates.jsonl"), "w") as f:
+                f.write(json.dumps({"i": 1, "text": "Quill Fakename", "label": "private_person", "count": 1,
+                                    "aliases": [], "example": "x", "agent": None}) + "\n")
+            with open(os.path.join(round1, "classified.jsonl"), "w") as f:
+                f.write(json.dumps({"batch": 0, "items": 1, "n_items": 1, "hits": [{"i": 1, "why": "a name"}]}) + "\n")
+            with self.assertRaises(SystemExit):  # the round has no done mark: unfinished
+                pf.main(["review", "--root", tmp])
+            open(os.path.join(round1, "done"), "w").close()
+            pf.main(["review", "--root", tmp])
+            with open(os.path.join(work, "review.json")) as f:
+                self.assertEqual(list(json.load(f)), ["p1"])
         finally:
             shutil.rmtree(tmp)

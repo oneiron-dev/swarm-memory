@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Build the served swarm bundle (docs/schema.md section 4).
 
-Reads meta/, slice/, tags/ and summaries/ under --root and writes --out (default <root>/bundle/data).
+Reads meta/, slice/, tags/ and summaries/ under --root (default $SWARM_WORK) and writes --out (default
+<root>/bundle/data). The redaction lists come from --lists (default $SWARM_LISTS or <root>/meta); a missing list is
+created empty and named on stdout (pipeline/common/swarm_paths.py says what the rules cut with empty lists).
 Every input except meta/ may be missing or partial: the matching bundle parts are then empty but valid.
 The new bundle is written beside the old one and swapped in at the end, so a running server never
 sees a half-written bundle. Build statistics go to <out>/../BUILD.json (not served).
@@ -27,6 +29,9 @@ import re
 import shutil
 import sys
 import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+import swarm_paths  # noqa: E402
 
 try:
     import orjson
@@ -72,7 +77,7 @@ PAIR_REF_RE = re.compile(r"^[a-z_]+:\S+$")
 DATASET = "aidigestorg/ai-village@838b4150"
 CITE = "Data: AI Digest / AI Village (theaidigest.org/village)"
 SUMMARIZER = "gpt-5.6-luna"
-DEFAULT_ROOT = "/home/lexi/calc-nvme/hackathon-20261004"
+DEFAULT_ROOT = None  # the work area comes from --root or $SWARM_WORK
 
 TOP_ENTITIES = 2000
 EXAMPLES = 5
@@ -1585,6 +1590,39 @@ def stage_problem(stage, beats: int, agents: set, text: str) -> str | None:
     return None
 
 
+def goal_of_day(goals: list, first_ts, last_ts, date, next_ts=None) -> dict | None:
+    """The goal in effect for most of a day: the one that overlaps the day's activity, its first row to its last, the
+    longest (the later goal on a tie). The span stops at the next day's first row (`next_ts`), since a row written
+    later can still be filed under the day (a daily log, a memory). A day with one row takes the goal in effect at
+    that row. An empty date (first_ts null) is measured over its whole UTC calendar date, so it takes the goal in
+    effect on that date, not the goal of the day before it. `goals` are {"start", "end"} records sorted by start;
+    None when no goal overlaps."""
+    ws = epoch(first_ts)
+    if ws is not None:
+        we = max(ws, epoch(last_ts) or ws)
+        if epoch(next_ts) is not None:
+            we = max(ws, min(we, epoch(next_ts)))
+    else:
+        try:
+            d0 = dt.datetime.fromisoformat(str(date)[:10]).replace(tzinfo=dt.timezone.utc)
+        except ValueError:
+            return None
+        ws, we = d0.timestamp(), d0.timestamp() + 86400
+    best, best_len = None, 0.0
+    for g in goals:
+        s = epoch(g.get("start"))
+        if s is None:
+            continue
+        e = epoch(g.get("end")) if g.get("end") else float("inf")
+        if we > ws:
+            overlap = min(we, e) - max(ws, s)
+            if overlap > 0 and overlap >= best_len:
+                best, best_len = g, overlap
+        elif s <= ws < e:
+            best = g
+    return best
+
+
 def book_chapters(days: list, goals: list) -> tuple:
     """The book's chapters: one per village goal that has days, in goal order. A day joins the chapter whose
     `goal` equals its `village_goal` exactly; a day without one joins the chapter of the day before it (the
@@ -1614,8 +1652,9 @@ def book_chapters(days: list, goals: list) -> tuple:
 class Builder:
     def __init__(self, args):
         self.args = args
-        self.root = args.root
+        self.root = swarm_paths.need_work(args.root)
         self.meta_dir = args.meta or os.path.join(self.root, "meta")
+        self.lists_dir = swarm_paths.lists_dir(self.root, args.lists or (args.meta if args.meta else None))
         self.slice_dir = args.slice or os.path.join(self.root, "slice")
         self.tags_dir = args.tags or os.path.join(self.root, "tags")
         self.sum_dir = args.summaries or os.path.join(self.root, "summaries")
@@ -1681,16 +1720,23 @@ class Builder:
         self.days.sort(key=lambda d: d["day"])
         self._index_days()
 
+        ds = read_json(os.path.join(m, "dataset.json"), {}) or {}  # written by from_jsonl.py; absent for AI Village
+        self.dataset = ds.get("dataset") if isinstance(ds.get("dataset"), str) else DATASET
+        self.cite = ds.get("cite") if isinstance(ds.get("cite"), str) else CITE
+
         self.summaries_index = {r["id"]: r for r in as_list(read_json(os.path.join(m, "summaries_index.json")))
                                 if isinstance(r, dict) and r.get("id")}
 
-        names_path = self.args.human_names or os.path.join(m, "human_names.json")
-        human_names = load_human_names(names_path)
-        self.extra_ids_path = self.args.extra_human_ids or os.path.join(m, EXTRA_IDS)
+        lists = self.lists_dir
+        if not (self.args.human_names and self.args.extra_human_ids and self.args.rules and self.args.context_handles):
+            swarm_paths.ensure_lists(lists, log=None if self.args.quiet else print)
+        self.names_path = self.args.human_names or os.path.join(lists, "human_names.json")
+        human_names = load_human_names(self.names_path)
+        self.extra_ids_path = self.args.extra_human_ids or os.path.join(lists, EXTRA_IDS)
         extra_ids = load_extra_ids(self.extra_ids_path)
-        self.rules_path = self.args.rules or os.path.join(m, RULES)
+        self.rules_path = self.args.rules or os.path.join(lists, RULES)
         self.rules = load_rules(self.rules_path)
-        self.context_path = self.args.context_handles or os.path.join(m, CONTEXT_HANDLES)
+        self.context_path = self.args.context_handles or os.path.join(lists, CONTEXT_HANDLES)
         self.rules["context"] = load_context_handles(self.context_path)
         self.names = Names(self.agents, human_names, zipf=load_zipf(self.args.common_words), extra_ids=extra_ids,
                            rules=self.rules)
@@ -1774,6 +1820,33 @@ class Builder:
                                              for sp in spans if sp.get("label") and isinstance(sp.get("s"), int)]
             counts["records"] += 1
         self.stats.counts["summary_tags"] = dict(counts)
+
+    @staticmethod
+    def model_of(records) -> str:
+        """The model most records name (their "model"), else the real run's summarizer."""
+        c = collections.Counter(r.get("model") for r in records if isinstance(r, dict) and isinstance(r.get("model"), str))
+        return c.most_common(1)[0][0] if c else SUMMARIZER
+
+    def tagger_name(self) -> str:
+        """tags/STATUS.json "tagger" (run_tagger.py writes it), else oneiroNER, the tagger of the real run."""
+        st = read_json(os.path.join(self.tags_dir, "STATUS.json"), {}) or {}
+        return st.get("tagger") if isinstance(st, dict) and isinstance(st.get("tagger"), str) else "oneiroNER"
+
+    def load_questions(self):
+        """questions/questions.json from docs/questions/make_questions.py (optional): served as data/questions.json
+        and swept like every other served string."""
+        path = self.args.questions or os.path.join(self.root, "questions", "questions.json")
+        if not os.path.exists(path):
+            return None
+        try:
+            raw = read_json(path)
+        except ValueError:
+            self.stats.warnings["questions: not valid JSON (skipped)"] += 1
+            return None
+        if not isinstance(raw, dict) or not isinstance(raw.get("questions"), list):
+            self.stats.warnings["questions: no questions list (skipped)"] += 1
+            return None
+        return raw
 
     def load_findings(self):
         """findings/findings.json (schema 4, optional): keep valid findings and cites; their refs get sources."""
@@ -1987,7 +2060,8 @@ class Builder:
                 counts["chapters_with_text"] += text is not None
             files["book.json"] = {"schema": BOOK_SCHEMA,
                                   "generated": self.args.generated or iso(dt.datetime.now(dt.timezone.utc).isoformat()),
-                                  "model": SUMMARIZER, "chapters": out_chapters, "days": out_days}
+                                  "model": self.model_of(self.book["days"].values()), "chapters": out_chapters,
+                                  "days": out_days}
             scores = collections.Counter()
             for agent, recs in sorted(per_agent.items()):
                 rows = []
@@ -2037,7 +2111,7 @@ class Builder:
                 out_pairs[str(d["day"])] = rows
             files["pairs.json"] = {"schema": PAIRS_SCHEMA,
                                    "generated": self.args.generated or iso(dt.datetime.now(dt.timezone.utc).isoformat()),
-                                   "model": SUMMARIZER, "days": out_pairs}
+                                   "model": self.model_of(self.book["pairs"].values()), "days": out_pairs}
         counts.update({"chapters": len(chapters), "days_without_goal_attached": attached, "talk_agents": len(talk)})
         self.stats.counts["book"] = dict(counts)
         return files
@@ -2114,6 +2188,9 @@ class Builder:
         self.agent_sessions = collections.defaultdict(set)
         self.agent_mems = collections.Counter()
         self.day_kind = collections.defaultdict(collections.Counter)
+        self.day_last = {}  # day -> its last slice row's time before the next day starts (for goal_at)
+        live = [d for d in self.days if d.get("first_ts")]
+        day_next = {a["day"]: b["first_ts"] for a, b in zip(live, live[1:])}  # iso strings, compared as strings
         self.day_sessions = collections.defaultdict(set)
         self.day_active = collections.defaultdict(set)
         self.series = {k: collections.defaultdict(collections.Counter) for k in ("chat", "sessions", "thinking")}
@@ -2160,6 +2237,9 @@ class Builder:
             self.kind_rows[kind] += 1
             self.kind_tokens[kind] += ntok
             self.day_kind[day][kind] += 1
+            t = r.get("time")  # a row written later can be filed under the day (a daily log): it does not count
+            if isinstance(t, str) and t > self.day_last.get(day, "") and (day not in day_next or t < day_next[day]):
+                self.day_last[day] = t
             if session:
                 self.day_sessions[day].add(session)
             if agent:
@@ -2664,15 +2744,13 @@ class Builder:
                           "first_day": min(rd) if rd else None, "last_day": max(rd) if rd else None,
                           "messages": self.room_msgs[r["id"]]})
 
+        live = [self.day_by_num[d] for d in all_days if self.day_by_num[d].get("first_ts")]
+        next_ts = {a["day"]: b["first_ts"] for a, b in zip(live, live[1:])}
+
         def goal_at(day_rec):
-            t = day_rec.get("first_ts")
-            cur = None
-            for g in self.village_goals:
-                if g["start"] and t and g["start"] <= t:
-                    cur = g
-            if cur and cur["end"] and t and cur["end"] <= t:
-                return None
-            return redact_plain(cur["goal"], names) if cur else None
+            g = goal_of_day(self.village_goals, day_rec.get("first_ts"), self.day_last.get(day_rec["day"]),
+                            day_rec.get("date"), next_ts.get(day_rec["day"]))
+            return redact_plain(g["goal"], names) if g else None
 
         days = []
         for d in all_days:
@@ -2735,7 +2813,7 @@ class Builder:
         n_summaries = len(village) + sum(len(v) for v in per_agent.values()) + sum(len(v) for v in per_room.values())
         manifest = {
             "schema": SCHEMA, "generated": self.args.generated or iso(dt.datetime.now(dt.timezone.utc).isoformat()),
-            "dataset": DATASET, "cite": CITE,
+            "dataset": self.dataset, "cite": self.cite,
             "range": {"first_day": all_days[0] if all_days else None, "last_day": last_day,
                       "first_date": first.get("date"), "last_date": last.get("date")},
             "counts": {"agents": sum(1 for a in agents if a["id"] != "human"), "rooms": len(rooms),
@@ -2743,11 +2821,11 @@ class Builder:
                        "mentions": sum(self.day_mentions.values()), "entities": len(entities),
                        "summaries": n_summaries, "tagged_rows": self.tagged,
                        "interaction_edges": len(edges)},
-            "tagger": {"name": "oneiroNER",
+            "tagger": {"name": self.tagger_name(),
                        "checkpoint": (self.models.most_common(1)[0][0] if self.models else DEFAULT_CHECKPOINT)
                        if self.tagged else None,
                        "labels": self.labels, "heads": heads, "snap": SNAP_VERSION},
-            "summarizer": SUMMARIZER}
+            "summarizer": self.model_of([r for v in list(per_agent.values()) + list(per_room.values()) for r in v])}
 
         previews = []
         for v in village:
@@ -2768,6 +2846,9 @@ class Builder:
         files.update(self.assemble_book(days, goals, per_agent, add_source, edges))
         if findings is not None:
             files["findings.json"] = findings
+        questions = self.load_questions()
+        if questions is not None:
+            files["questions.json"] = questions
         if self.args.village_layout == "per-day":
             for v in village:  # one full AI Digest daily text per file
                 files[f"summaries/village/{v['day']}.json"] = v
@@ -2875,7 +2956,7 @@ class Builder:
         if self.args.validate:  # a bundle that fails validation never replaces the served one
             import validate_bundle
             v = validate_bundle.validate(tmp, self.args.meta or self.meta_dir, zipf=self.names.zipf,
-                                         untagged=self.untagged, human_names=self.args.human_names,
+                                         untagged=self.untagged, human_names=self.names_path,
                                          extra_ids=self.extra_ids_path, rules=self.rules_path,
                                          context_handles=self.context_path)
             self.validation_errors = v.errors
@@ -2908,8 +2989,11 @@ class Builder:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--root", default=DEFAULT_ROOT, help="work area holding meta/ slice/ tags/ summaries/")
+    ap.add_argument("--root", default=swarm_paths.work_default(),
+                    help="work area holding meta/ slice/ tags/ summaries/ (default $SWARM_WORK)")
     ap.add_argument("--meta")
+    ap.add_argument("--lists", help="redaction-list dir (default $SWARM_LISTS or <root>/meta); missing lists are "
+                                    "created empty")
     ap.add_argument("--slice")
     ap.add_argument("--tags")
     ap.add_argument("--summaries")
@@ -2922,6 +3006,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--context-handles", help="handles cut only in handle context (default meta/context_handles.json)")
     ap.add_argument("--common-words", help="JSON {word: zipf} instead of the wordfreq package (tests)")
     ap.add_argument("--findings", help="findings JSON (default <root>/findings/findings.json; optional)")
+    ap.add_argument("--questions", help="questions JSON from make_questions.py (default <root>/questions/questions.json; "
+                                        "optional)")
     ap.add_argument("--book", help="book cache dir from pipeline/book (default <root>/book; optional)")
     ap.add_argument("--top-entities", type=int, default=TOP_ENTITIES)
     ap.add_argument("--budget", type=int, default=BUNDLE_BUDGET, help="max bytes of bundle.json; entities are trimmed to fit")

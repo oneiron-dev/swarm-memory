@@ -838,20 +838,18 @@ class Publish(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
-    def test_missing_name_list_stops_the_build(self):
+    def test_malformed_lists_stop_the_build(self):
         tmp = tempfile.mkdtemp()
         try:
             make_fixtures.build(tmp)
-            os.remove(os.path.join(tmp, "meta", "human_names.json"))
-            with self.assertRaises(SystemExit):
-                run(tmp)
             with open(os.path.join(tmp, "meta", "human_names.json"), "w") as f:
                 f.write("{not json")
             with self.assertRaises(SystemExit):
                 run(tmp)
             self.assertFalse(os.path.exists(os.path.join(tmp, "bundle", "data")))
             make_fixtures.build(tmp)
-            os.remove(os.path.join(tmp, "meta", "extra_human_ids.json"))  # the extra id list is required too
+            with open(os.path.join(tmp, "meta", "extra_human_ids.json"), "w") as f:
+                json.dump({"not": "a list"}, f)
             with self.assertRaises(SystemExit):
                 run(tmp)
             self.assertFalse(os.path.exists(os.path.join(tmp, "bundle", "data")))
@@ -861,6 +859,31 @@ class Publish(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 run(tmp)
             self.assertFalse(os.path.exists(os.path.join(tmp, "bundle", "data")))
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_missing_lists_are_created_empty_in_the_lists_dir(self):
+        """A stranger's first build: no lists yet. They are made empty (named on stdout), the rules still cut
+        emails and handles, and --lists points every list at another directory."""
+        tmp = tempfile.mkdtemp()
+        try:
+            make_fixtures.build(tmp)
+            for name in ("human_names.json", "extra_human_ids.json", "context_handles.json", "extra_human_rules.json"):
+                os.remove(os.path.join(tmp, "meta", name))
+            lists = os.path.join(tmp, "my-lists")
+            report = run(tmp, "--lists", lists)
+            self.assertTrue(report["swapped_in"])
+            for name, empty in (("human_names.json", []), ("extra_human_ids.json", []),
+                                ("context_handles.json", []), ("extra_human_rules.json", {})):
+                with open(os.path.join(lists, name)) as f:
+                    self.assertEqual(json.load(f), empty)
+                self.assertFalse(os.path.exists(os.path.join(tmp, "meta", name)))
+            data = os.path.join(tmp, "bundle", "data")
+            served = json.dumps([load(data, f"sources/{d}.json") for d in (1, 2, 3, 4)
+                                 if os.path.exists(os.path.join(data, f"sources/{d}.json"))])
+            self.assertIn("[email]", served)  # emails and handles are cut by rule alone; agents and public accounts stay
+            self.assertNotRegex(served, r"@(?!Agent Alpha|aidigest_)[A-Za-z]")
+            self.assertIn("quill_77", served)  # a bare username with no handle shape is a list's job: it stays
         finally:
             shutil.rmtree(tmp)
 

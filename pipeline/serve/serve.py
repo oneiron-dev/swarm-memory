@@ -4,7 +4,11 @@
   /            -> --dist (the built frontend; unknown paths without a file extension fall back to index.html).
                   Until --dist holds an index.html, a placeholder page with the bundle counts.
   /data/...    -> --data (the bundle; read-only; JSON gets Cache-Control: max-age=60; gzip when accepted)
-  /api/health  -> {"ok", "generated", "counts", "dist"}
+  /api/health  -> {"ok", "generated", "counts", "dist"}; "ok" is true only when bundle.json has a manifest
+
+Defaults: --data $SWARM_WORK/bundle/data and --dist $SWARM_WORK/web-dist (or --work <dir> for both).
+--check starts the server on a free port, fetches /api/health, / and /data/bundle.json, prints them and exits 0
+only when health says ok and both pages answer 200: the runbook's last step.
 
 Only GET and HEAD. Nothing outside the two folders is ever served: paths are decoded, normalised and
 resolved (symlinks included) and must stay inside their folder; that check runs on the final path of every
@@ -24,6 +28,7 @@ import posixpath
 import sys
 import threading
 import urllib.parse
+import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -124,7 +129,7 @@ table{{border-collapse:collapse}}td{{padding:.2rem 1rem .2rem 0;border-bottom:1p
 td+td{{text-align:right;font-variant-numeric:tabular-nums}}small{{color:#666}}</style></head><body>
 <h1>Swarm memory</h1><p>The app is being built. The data bundle is live at <a href="/data/bundle.json">/data/bundle.json</a>.</p>
 <p>{html.escape(span)}</p><table>{rows}</table><p><small>{gen}</small></p>
-<p>{html.escape(CITE)} (<a href="https://theaidigest.org/village">theaidigest.org/village</a>). Research use only.</p>
+<p>{html.escape((manifest or {}).get("cite") or CITE)}. Research use only.</p>
 </body></html>"""
     return page.encode()
 
@@ -242,20 +247,59 @@ def make_server(host: str, port: int, data: str, dist: str) -> ThreadingHTTPServ
     return srv
 
 
+def check(data: str, dist: str, host: str = "127.0.0.1") -> int:
+    """Serve on a free port in a thread, fetch the health, the app and the manifest; 0 when all are good."""
+    srv = make_server(host, 0, data, dist)
+    port = srv.server_address[1]
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    bad = []
+    try:
+        base = f"http://{host}:{port}"
+        with urllib.request.urlopen(base + "/api/health", timeout=10) as r:
+            health = json.load(r)
+        print(f"GET /api/health {r.status} {json.dumps(health)}")
+        if not health.get("ok"):
+            bad.append(f"health ok is false: no readable bundle.json in {data}")
+        if not health.get("dist"):
+            bad.append(f"no index.html in {dist}: build the web app and copy web/dist there")
+        for path in ("/", "/data/bundle.json"):
+            try:
+                with urllib.request.urlopen(base + path, timeout=10) as r:
+                    print(f"GET {path} {r.status} {len(r.read())} bytes")
+            except OSError as e:
+                bad.append(f"GET {path}: {e}")
+    finally:
+        srv.shutdown()
+    for b in bad:
+        print("FAIL", b)
+    print("OK: the site and its bundle answer" if not bad else f"FAIL: {len(bad)} problems")
+    return 1 if bad else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8790)
-    ap.add_argument("--data", default="/home/lexi/calc-nvme/hackathon-20261004/bundle/data")
-    ap.add_argument("--dist", default="/home/lexi/calc-nvme/hackathon-20261004/web-dist")
+    ap.add_argument("--work", default=os.environ.get("SWARM_WORK"), help="the work area (default $SWARM_WORK)")
+    ap.add_argument("--data", help="the bundle (default <work>/bundle/data)")
+    ap.add_argument("--dist", help="the built web app (default <work>/web-dist)")
+    ap.add_argument("--check", action="store_true", help="serve on a free port, check health, / and the bundle, exit")
     args = ap.parse_args(argv)
+    if not (args.data and args.dist) and not args.work:
+        raise SystemExit("serve: set SWARM_WORK=<work area> or pass --work, or both --data and --dist")
+    args.data = args.data or os.path.join(args.work, "bundle", "data")
+    args.dist = args.dist or os.path.join(args.work, "web-dist")
+    if args.check:
+        return check(args.data, args.dist, args.host)
     srv = make_server(args.host, args.port, args.data, args.dist)
     print(f"serving http://{args.host}:{args.port}/  data={args.data}  dist={args.dist}", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

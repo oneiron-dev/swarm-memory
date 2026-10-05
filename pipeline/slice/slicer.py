@@ -569,14 +569,16 @@ class Slicer:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--data", default="/mnt/wd16/datasets/aidigestorg/ai-village")
-    ap.add_argument("--out", default="/home/lexi/calc-nvme/hackathon-20261004",
-                    help="writes <out>/slice/ and <out>/meta/")
+    ap.add_argument("--data", required=True, help="the AI Village table dir (gzipped JSONL + village-transcript.json)")
+    ap.add_argument("--out", default=os.environ.get("SWARM_WORK"),
+                    help="writes <out>/slice/ and <out>/meta/ (default $SWARM_WORK)")
     ap.add_argument("--limit", type=int, default=None, help="rows per table (dry runs)")
     ap.add_argument("--tables", default=",".join(TABLE_ORDER), help="comma list; others are skipped")
     ap.add_argument("--tokenizer", default="Alibaba-NLP/gte-multilingual-mlm-base",
                     help="HF tokenizer id, or 'whitespace' for tests")
     a = ap.parse_args(argv)
+    if not a.out:
+        raise SystemExit("slicer: set SWARM_WORK=<work area> or pass --out <dir>")
 
     def log(msg):
         print(time.strftime("%H:%M:%S"), msg, flush=True)

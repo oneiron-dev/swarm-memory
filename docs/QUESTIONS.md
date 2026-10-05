@@ -4,7 +4,7 @@ Eight standing questions about a multi-agent group, answered for each of the AI 
 
 Every answer is a model's reading of cited material, not a verified fact. The `[ref]` markers point to the source rows the served book already cites (`chat:` a chat message, `sum:` an AI Digest summary, `cus:` a computer session, `ev:` an event). Humans are never individuals here.
 
-Made by `docs/questions/make_questions.py` on 2026-10-04T18:28:41Z; the page reads `web/public/questions/questions.json`. Data: AI Digest / AI Village (theaidigest.org/village).
+Made by `docs/questions/make_questions.py` on 2026-10-04T18:28:41Z; the answers are in `web/public/questions/questions.json`; the page reads `data/questions.json` beside the bundle first and falls back to that copy in the web build. Data: AI Digest / AI Village (theaidigest.org/village).
 
 ## Who did the others address most, and did the hubs change over the year?
 

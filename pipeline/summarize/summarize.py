@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Per-agent and per-room daily summaries with citations (docs/schema.md section 3).
 
-Reads the slice (section 1), builds one numbered prompt per unit, asks gpt-5.6-luna
-through prime-agent, validates the [n] markers and appends one record per line to
-summaries/{room,agent}.jsonl. Resume-safe: ids already written are skipped.
+Reads the slice (section 1), builds one numbered prompt per unit, asks the model (any OpenAI-compatible
+endpoint, our prime-agent harness, or --mock for templated text without a model; pipeline/common/swarm_llm.py),
+validates the [n] markers and appends one record per line to summaries/{room,agent}.jsonl. Resume-safe: ids
+already written are skipped.
 
-Subcommands: estimate, run, pilot-md. See README.md.
+Subcommands: estimate, run, audit-existing, pilot-md. See README.md.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ import random
 import re
 import signal
 import statistics
-import subprocess
 import sys
 import threading
 import time
@@ -25,7 +25,12 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-MODEL = "gpt-5.6-luna"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+import swarm_llm  # noqa: E402
+import swarm_paths  # noqa: E402
+from swarm_llm import CallError, ModelMismatch  # noqa: E402,F401  (book.py imports them from here)
+
+MODEL = swarm_llm.DEFAULT_MODEL  # the real run's model; records carry the model each call actually used
 AGENT_KINDS = ("chat", "session_goal", "session_summary", "next_goal",
                "history_query", "outreach", "cc_text", "memory")
 ROOM_KINDS = ("chat",)
@@ -305,61 +310,19 @@ def validate(text: str, nmap: dict):
 
 # ---------------------------------------------------------------- the model call
 
-class ModelMismatch(RuntimeError):
-    pass
-
-
 class UnitFailed(RuntimeError):
     def __init__(self, msg, attempts):
         super().__init__(msg)
         self.attempts = attempts
 
 
-class CallError(RuntimeError):
-    def __init__(self, msg, rate_limited=False):
-        super().__init__(msg)
-        self.rate_limited = rate_limited
-
-
-RATE_RE = re.compile(r"\b429\b|rate.?limit|too many requests|quota|overloaded|\b5\d\d\b|unavailable", re.I)
-
-
-def call_luna(stdin_text: str, task: str, cfg, system: str) -> dict:
-    cmd = [cfg.prime_agent, "-p", "--mode", "json", "--json-event-profile", "factory-completed",
-           "--provider", cfg.provider, "--model", MODEL, "--thinking", cfg.thinking,
-           "--no-tools", "--no-session", "-ns", "-np", "-nc",
-           "--system-prompt", system, task]
-    try:
-        p = subprocess.run(cmd, input=stdin_text, capture_output=True, text=True,
-                           timeout=cfg.timeout, cwd=cfg.call_cwd)
-    except subprocess.TimeoutExpired:
-        raise CallError(f"timeout after {cfg.timeout}s")
-    msg = None
-    for line in p.stdout.splitlines():
-        if not line.startswith('{"type":"agent_end"') and '"agent_end"' not in line[:40]:
-            continue
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            continue
-        for m in ev.get("messages", []):
-            if m.get("role") == "assistant":
-                msg = m
-    if msg is None:
-        err = (p.stderr or p.stdout)[-600:]
-        raise CallError(f"exit {p.returncode}, no assistant message: {err}", bool(RATE_RE.search(err)))
-    if msg.get("stopReason") == "error" or msg.get("errorMessage"):
-        err = str(msg.get("errorMessage") or "")[:600]
-        raise CallError(f"stopReason error: {err}", bool(RATE_RE.search(err)))
-    rm = msg.get("responseModel")
-    if rm != MODEL:
-        raise ModelMismatch(f"responseModel={rm!r}, expected {MODEL!r}")
-    text = "\n".join(c.get("text", "") for c in msg.get("content", []) if c.get("type") == "text").strip()
-    if not text:
-        raise CallError("empty text")
-    usage = msg.get("usage") or {}
-    return {"text": text, "model": rm, "in": usage.get("input", 0) + usage.get("cacheRead", 0),
-            "out": usage.get("output", 0)}
+def call_luna(stdin_text: str, task: str, cfg, system: str, purpose: str | None = None, json_mode: bool = False) -> dict:
+    """One call through the configured client (cfg.llm): {"text", "model", "in", "out"}. The name stays from the
+    real run; book.py calls it too."""
+    if purpose is None:
+        purpose = "audit" if system.startswith("You check a short text") else "summary"
+    return cfg.llm.call(stdin_text, task, system, json_mode=json_mode, purpose=purpose,
+                        cwd=getattr(cfg, "call_cwd", None))
 
 
 # ---------------------------------------------------------------- the run
@@ -473,7 +436,8 @@ class Runner:
                 self.inflight.add(uid)
             ok = rate = err = False
             try:
-                res = call_luna(stdin_text, task, self.cfg, system)
+                res = call_luna(stdin_text, task, self.cfg, system,
+                                json_mode=system is self.audit_system)
                 if system is self.audit_system:
                     res["names"] = parse_names(res["text"])
                 ok = True
@@ -576,7 +540,7 @@ class Runner:
     def _write(self, prompt, text, cites, calls, secs, tin, tout, in_first, regenerated=False, scrubbed=False):
         scope, name, day = prompt["key"]
         rec = {"id": prompt["id"], "scope": scope, "key": name, "day": day, "date": prompt["date"],
-               "text": text, "cites": cites, "model": MODEL}
+               "text": text, "cites": cites, "model": self.cfg.llm.model}
         if prompt["sampled"]:
             rec["sampled"] = True
         if not cites:
@@ -750,6 +714,11 @@ def estimate(cfg):
     out["latency_source"] = "calls.jsonl median" if lat else "assumed"
     out["calibration_actual_over_est"] = round(calib, 3)
     out["wall_hours"] = {str(c): round(units * latency / c / 3600, 2) for c in (8, 12)}
+    client = swarm_llm.from_args(cfg, required=False)
+    out["model_client"] = client.describe() if client else (
+        "no model backend configured (export SWARM_LLM_MOCK=1 for a dry run, or SWARM_LLM_BASE_URL, SWARM_LLM_MODEL "
+        "and SWARM_LLM_API_KEY for a real model)")
+    out["calls_expected"] = f"{units} summary calls plus {units} name-check calls (fewer with --no-audit)"
     path = os.path.join(cfg.work, "summaries", "ESTIMATE.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
@@ -808,7 +777,7 @@ def pilot_md(cfg):
                 if rec.get("id") in refs:
                     texts[rec["id"]] = rec
     lines = ["# Summarizer pilot (local only, never commit)", "",
-             f"Generated {utcnow()}. Model {MODEL}. Spot-check: open 2 cited refs per record.", ""]
+             f"Generated {utcnow()}. Spot-check: open 2 cited refs per record.", ""]
     for r in recs:
         flags = " ".join(f for f in ("sampled", "uncited") if r.get(f))
         lines += [f"## {r['id']} ({r['date']}) {flags}", "", r["text"], ""]
@@ -829,17 +798,13 @@ def pilot_md(cfg):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=("estimate", "run", "pilot-md", "audit-existing"))
-    ap.add_argument("--work", default="/home/lexi/calc-nvme/hackathon-20261004")
+    ap.add_argument("--work", default=swarm_paths.work_default(), help="the work area (default $SWARM_WORK)")
     ap.add_argument("--scope", default="all", choices=("all", "room", "agent"))
     ap.add_argument("--since-day", type=int, default=None, help="only units with day >= this")
     ap.add_argument("--limit", type=int, default=None, help="at most this many new units")
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--max-concurrency", type=int, default=12)
     ap.add_argument("--cap", type=int, default=INPUT_CAP, help="approximate input tokens per call")
-    ap.add_argument("--provider", default="cpa-r")
-    ap.add_argument("--thinking", default="low")
-    ap.add_argument("--prime-agent", default=os.environ.get("PRIME_AGENT", "prime-agent"))
-    ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--max-attempts", type=int, default=6)
     ap.add_argument("--backoff", type=float, default=10.0, help="first retry delay, seconds; doubles")
     ap.add_argument("--max-consecutive-fail", type=int, default=25)
@@ -851,7 +816,9 @@ def main(argv=None):
     ap.add_argument("--n", type=int, default=10, help="pilot-md: records to show")
     ap.add_argument("--first", action="store_true", help="pilot-md: first n records instead of last n")
     ap.add_argument("--ids", default=None, help="pilot-md: comma-separated ids")
+    swarm_llm.add_args(ap, timeout=300)
     cfg = ap.parse_args(argv)
+    cfg.work = swarm_paths.need_work(cfg.work, "--work")
     cfg.scopes = ["room", "agent"] if cfg.scope == "all" else [cfg.scope]
     cfg.call_cwd = os.path.join(cfg.work, "summaries", ".cwd")
     os.makedirs(cfg.call_cwd, exist_ok=True)
@@ -859,6 +826,8 @@ def main(argv=None):
         return estimate(cfg)
     if cfg.cmd == "pilot-md":
         return pilot_md(cfg)
+    cfg.llm = swarm_llm.from_args(cfg)
+    print(f"{utcnow()} model client: {cfg.llm.describe()}", file=sys.stderr, flush=True)
     runner = Runner(cfg)
     signal.signal(signal.SIGTERM, lambda *_: runner.stop.set())  # finish in-flight calls, then exit
     return runner.audit_existing() if cfg.cmd == "audit-existing" else runner.run()

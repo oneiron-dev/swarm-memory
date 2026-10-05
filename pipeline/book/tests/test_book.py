@@ -294,6 +294,67 @@ class Book(unittest.TestCase):
         self.assertEqual(self.calls("rephrase", "ok"), 1)
         self.assertEqual(rephrase("ok"), rows)  # the reworded text gets no chip: nothing more to do
 
+    def pairs_fixture(self):
+        """A served edge between Agent Alpha and the humans on day 1, the two chat rows that made it, and the meta/
+        the builder's name matcher reads."""
+        with open(os.path.join(self.data, "bundle.json")) as f:
+            b = json.load(f)
+        b["views"] = {"interactions": {"edges": [{"from": "human", "to": "agent-alpha", "w": 2,
+                                                  "kinds": {"mention": 1, "reply": 1}, "by_day": [[1, 2]]}]}}
+        with open(os.path.join(self.data, "bundle.json"), "w") as f:
+            json.dump(b, f)
+        os.makedirs(os.path.join(self.tmp, "slice"))
+        with open(os.path.join(self.tmp, "slice", "slice-chat.jsonl"), "w") as f:
+            for i, (who, text) in enumerate((("agent-alpha", "The pretend oven is warm."),
+                                             ("human", "Agent Alpha, is the oven ready?"))):
+                f.write(json.dumps({"id": f"chat:p-{i}", "time": f"2030-01-01T17:0{i}:00Z", "day": 1, "agent": who,
+                                    "speaker": "human" if who == "human" else "agent", "room": "room-x",
+                                    "kind": "chat", "text": text}) + "\n")
+        meta = os.path.join(self.tmp, "meta")
+        os.makedirs(meta)
+        for name, obj in (("agents.json", [{"id": "agent-alpha", "name": "Agent Alpha", "model": "alpha-1"}]),
+                          ("rooms.json", [{"id": "room-x", "name": "room-x"}]), ("common_words.json", {})):
+            with open(os.path.join(meta, name), "w") as f:
+                json.dump(obj, f)
+        return ["--root", self.tmp, "--common-words", os.path.join(meta, "common_words.json")]
+
+    def test_pairs_writes_one_sentence_per_talking_pair(self):
+        """The pairs step asks once per pair and saves the sentence (its dispatch went missing once and the step
+        printed "18 to do" and wrote nothing)."""
+        extra = self.pairs_fixture()
+        os.environ["FAKE_BOOK_MODE"] = "ok"
+        os.environ["FAKE_BOOK_STATE"] = os.path.join(self.tmp, "state-pairs")
+        B.main(["pairs", "--data", self.data, "--book", self.book, "--prime-agent", FAKE, *extra])
+        rows = read(os.path.join(self.book, "pairs.jsonl"))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["day"], rows[0]["a"], rows[0]["b"]), (1, "agent-alpha", "human"))
+        self.assertEqual(rows[0]["text"], "Agent Alpha and the humans talked about the pretend oven that day.")
+        self.assertEqual(rows[0]["cites"], ["chat:p-0"])
+        with open(os.path.join(self.tmp, "state-pairs", "calls")) as f:
+            self.assertEqual(sum(1 for _ in f), 1)
+        B.main(["pairs", "--data", self.data, "--book", self.book, "--prime-agent", FAKE, *extra])
+        self.assertEqual(len(read(os.path.join(self.book, "pairs.jsonl"))), 1)  # cached: nothing asked again
+
+    def test_the_mock_writes_a_whole_book_that_passes_every_rule(self):
+        """--mock: no model, no key; every step's reply passes the same acceptance rules a model's must."""
+        extra = self.pairs_fixture()
+        for step in ("days", "gaps", "chapters", "hooks", "pairs", "stage", "adherence", "rephrase"):
+            B.main([step, "--mock", "--data", self.data, "--book", self.book, "--parallel", "2", *extra])
+        days = {r["day"]: r for r in read(os.path.join(self.book, "days.jsonl"))}
+        self.assertTrue(all(B.day_ok(r["text"], r["cites"], r["cites"]) is None for r in days.values()
+                            if not r.get("empty")))
+        self.assertEqual({r["model"] for r in days.values() if not r.get("empty")}, {"mock"})
+        chapters = read(os.path.join(self.book, "chapters.jsonl"))
+        self.assertEqual(len(chapters), 2)
+        hooks = read(os.path.join(self.book, "hooks.jsonl"))
+        self.assertTrue(all(h["hook"] and h["beats"] and not h["why"] for h in hooks))
+        stage = read(os.path.join(self.book, "stage.jsonl"))
+        self.assertTrue(stage and all(r["stage"] for r in stage))
+        pairs = read(os.path.join(self.book, "pairs.jsonl"))
+        self.assertTrue(pairs and all(isinstance(r["text"], str) for r in pairs))
+        adh = read(os.path.join(self.book, "adherence.jsonl"))
+        self.assertEqual(len(adh), 3)
+
     def test_exhausted_retries_stay_missing(self):
         self.run_step("days", "short")  # too short and uncited, three times: never saved
         rows = read(os.path.join(self.book, "days.jsonl"))

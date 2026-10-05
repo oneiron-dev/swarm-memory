@@ -1,8 +1,57 @@
-# pipeline/tag — entity spans and turn mood with oneiroNER
+# pipeline/tag: entity spans and turn mood, through any tagger
 
 This step reads the slice (`slice/slice-<kind>.jsonl`, schema §1) and writes one tag record per slice row
-(`tags/tags-<kind>.jsonl`, schema §2), same `id`, same order. The tagger itself is private model code (oneiroNER);
-this folder documents the contract and how the run was made. Nothing here contains dataset text.
+(`tags/tags-<kind>.jsonl`, schema §2), same `id`, same order. The tagger is pluggable: `run_tagger.py` drives an
+adapter and checks every file it writes against the slice before it is renamed into place.
+
+```bash
+pip install -r pipeline/tag/requirements-gliner.txt          # or scripts/setup.sh --tagger
+export SWARM_WORK=$W
+python3 pipeline/tag/run_tagger.py --adapter gliner_vad              # the slice -> tags/; a rerun skips matching files
+python3 pipeline/tag/run_tagger.py --adapter gliner_vad --summaries  # after the summarizer: tags/tags-summaries.jsonl
+python3 pipeline/tag/run_tagger.py --check                           # check existing tag files only
+```
+
+Flags: `--limit N` (the first N rows of each kind, a pilot), `--kinds chat,memory`, `--force`, `--batch 16`,
+`--cache <dir>` (downloads; default `$SWARM_CACHE` or `~/.cache/swarm-reader`), `--cmd` (the `oneironer` command).
+`tags/STATUS.json` records the tagger, the model, rows, spans and seconds per kind; `tags/LABELS.json` the label order.
+
+## Adapters (`adapters/`)
+
+| adapter | needs | spans | mood |
+|---|---|---|---|
+| `gliner_vad` (reference) | `requirements-gliner.txt`, CPU; downloads GLiNER small (~600 MB, Apache-2.0) and the NRC VAD Lexicon (6.5 MB) on first use | GLiNER `urchade/gliner_small-v2.1`, nine plain-English labels mapped onto ours | NRC VAD Lexicon v2.1, mean of the matched terms |
+| `oneironer` (optional) | our private oneiroNER checkpoint and its batch tagger, run through `ONEIRONER_TAG_CMD` | oneiroNER `rd16c-ch` (the real run, below) | its VAD head |
+| `none` | nothing | none | none: no entities, no mood; never for a public bundle |
+
+An adapter is a small class (`adapters/__init__.py` has the contract): `load(args)` once, then `tag(rows)` returns
+`{"spans", "mood"}` per row in order; or `run_all(...)` for a tagger that runs as its own program. Add yours to
+`ADAPTERS` there.
+
+**gliner_vad, measured.** On the tiny-village sample (243 slice rows, about 21,000 characters) on an Apple M-series
+laptop CPU: model load 5.8 s, tagging about 105 rows/s and 9,500 characters/s (batches of 16), mood on every row.
+The summaries (36 records, 11,700 characters): about 60 rows/s. A first run downloads the model (about 30 s here).
+Speed goes with characters: at 9,500 a second, 100 million characters take about three hours on one laptop CPU.
+
+**gliner_vad, two privacy biases.** GLiNER calls some people products or organisations: in tests it labelled an
+invented full name PRODUCT (0.75) and gave it no person score at all, and the builder serves ORG and PRODUCT entities.
+So the adapter makes a span PERSON when GLiNER scores it as a person at 0.3 or more, and tags a capitalised name right
+after "I am", "I'm", "my name is", "call me", "Dear" or "signed" as PERSON whatever GLiNER said (agent names are left
+alone). It also drops pronouns and generic roles GLiNER calls persons ("I", "everyone", "buyers") and widens a span
+inside an agent's name to the whole name ("Birch" of "Birch 2.1"), so the build files it under the agent. These are
+heuristics: a name written any other way still needs a list entry or a person's review (SKILL.md section 5).
+
+**Mood licence.** The NRC VAD Lexicon (Saif M. Mohammad, National Research Council Canada; cite arXiv:2503.23547) is
+free for non-commercial research and educational use; commercial use needs a licence from NRC. The adapter downloads
+it into the cache and never into the repo, and prints this note on every run.
+
+**Register.** Dialogue tags better in the conversation register: group chat rows by room in time order, pack them
+into long windows and prefix each row with a role only (`A: ` for a human, `B: ` for an agent, never a name); map spans
+back to their row and drop any span that crosses two rows or touches a prefix. Read mood from the row alone. The real
+run did this with oneiroNER (below); `gliner_vad` tags row by row.
+
+The rest of this file is the real run: oneiroNER over the AI Village slice. The tagger itself is private model code
+(oneiroNER); nothing here contains dataset text.
 
 ## Output
 

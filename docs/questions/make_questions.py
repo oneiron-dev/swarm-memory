@@ -2,32 +2,33 @@
 """The questions an overseer always asks: eight pre-written questions answered per chapter and for the year.
 
 Reads only the served bundle (bundle.json, book.json, adherence/, talk/, memory/, summaries/agent/, entities/,
-sources/) from a local copy, asks gpt-5.6-luna one call per chapter and one call per question for the year, and
-writes web/public/questions/questions.json. Every answer cites refs that the served book already cites.
+sources/), asks the model one call per chapter and one call per question for the year, and writes
+$SWARM_WORK/questions/questions.json (and QUESTIONS.md beside it). The next build_bundle.py run serves it as
+data/questions.json, where the web page reads it. Every answer cites refs that the served book already cites.
 
-    python3 docs/questions/make_questions.py --data <local copy of data/> --cache <scratch dir>
-        --out web/public/questions/questions.json --md docs/QUESTIONS.md
+    export SWARM_WORK=$W
+    python3 docs/questions/make_questions.py --endpoint https://api.openai.com/v1 --model <id>   # or --mock
 
-The model key is read by the local key script inside this process and is never printed or stored.
+The model client is pipeline/common/swarm_llm.py (--endpoint, --prime-agent or --mock; env SWARM_LLM_BASE_URL,
+SWARM_LLM_API_KEY, SWARM_LLM_MODEL). The key is read from the environment and is never printed or stored.
 """
 import argparse
 import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-MODEL = "gpt-5.6-luna"  # the book pipeline's slug (pipeline/summarize/summarize.py)
-URL = "http://arch.tail87c1d7.ts.net:8317/v1/chat/completions"
-KEY_SCRIPT = os.path.expanduser("~/.prime/agent/scripts/get_cliproxy_local_key.py")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "pipeline", "common"))
+import swarm_llm  # noqa: E402
+import swarm_paths  # noqa: E402
+
+MODEL = swarm_llm.DEFAULT_MODEL  # the real run's model; questions.json records the model that answered
 NOTHING = "nothing recorded"
 CHAPTER_WORDS = 60
 YEAR_WORDS = 120
@@ -150,62 +151,48 @@ class ModelMismatch(RuntimeError):
 
 
 class Luna:
-    def __init__(self, cache: str, effort: str):
+    """The model through the shared client, with a reply cache keyed by model, effort, system prompt and prompt."""
+
+    def __init__(self, cache: str, effort: str | None, llm):
         self.cache = cache
         self.effort = effort
-        self.key = None
+        self.llm = llm
         self.lock = threading.Lock()
         self.calls = 0
         self.cached = 0
         self.tokens = Counter()
         os.makedirs(cache, exist_ok=True)
 
-    def _key(self) -> str:
-        with self.lock:
-            if self.key is None:
-                self.key = subprocess.run([sys.executable, KEY_SCRIPT], capture_output=True, text=True,
-                                          timeout=30).stdout.strip()
-                if not self.key:
-                    raise SystemExit("the key script returned nothing")
-            return self.key
-
-    def ask(self, uid: str, prompt: str, effort: str | None = None) -> str:
+    def ask(self, uid: str, prompt: str, effort: str | None = None, purpose: str | None = None) -> str:
         effort = effort or self.effort
-        sha = hashlib.sha256(f"{MODEL}\n{effort}\n{SYSTEM}\n{prompt}".encode()).hexdigest()[:16]
+        sha = hashlib.sha256(f"{self.llm.model}\n{effort}\n{SYSTEM}\n{prompt}".encode()).hexdigest()[:16]
         path = os.path.join(self.cache, f"{uid}.{sha}.json")
         hit = load(path)
         if hit and hit.get("text"):
             with self.lock:
                 self.cached += 1
             return hit["text"]
-        body = {"model": MODEL, "reasoning_effort": effort,
-                "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]}
         last = None
         for attempt in range(4):
-            req = urllib.request.Request(URL, data=json.dumps(body).encode(), headers={
-                "Authorization": f"Bearer {self._key()}", "Content-Type": "application/json"})
             t0 = time.time()
             try:
-                with urllib.request.urlopen(req, timeout=600) as r:
-                    reply = json.load(r)
-            except (urllib.error.URLError, TimeoutError, ValueError, OSError) as e:
+                res = self.llm.call("", prompt, SYSTEM, json_mode=True, purpose=purpose, effort=effort)
+            except swarm_llm.ModelMismatch as e:
+                raise ModelMismatch(f"{uid}: {e}")
+            except swarm_llm.CallError as e:
                 last = str(e)[:200]
                 print(f"{uid}: attempt {attempt + 1} failed ({last}); retrying", file=sys.stderr, flush=True)
                 time.sleep(5 * (attempt + 1))
                 continue
-            model = reply.get("model")
-            if model != MODEL:
-                raise ModelMismatch(f"{uid}: reply model {model!r}, expected {MODEL!r}")
-            text = (reply.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-            usage = reply.get("usage") or {}
             with self.lock:
                 self.calls += 1
-                self.tokens["in"] += usage.get("prompt_tokens", 0)
-                self.tokens["out"] += usage.get("completion_tokens", 0)
+                self.tokens["in"] += res["in"]
+                self.tokens["out"] += res["out"]
             with open(path, "w") as f:
-                json.dump({"uid": uid, "model": model, "effort": effort, "seconds": round(time.time() - t0, 1),
-                           "usage": usage, "text": text, "at": utcnow()}, f, ensure_ascii=False)
-            return text
+                json.dump({"uid": uid, "model": res["model"], "effort": effort, "seconds": round(time.time() - t0, 1),
+                           "usage": {"prompt_tokens": res["in"], "completion_tokens": res["out"]},
+                           "text": res["text"], "at": utcnow()}, f, ensure_ascii=False)
+            return res["text"]
         raise RuntimeError(f"{uid}: no reply after 4 attempts ({last})")
 
 
@@ -374,7 +361,7 @@ def answer_chapter(data: Data, luna: Luna, ch: dict) -> dict:
         p = prompt if attempt == 0 else prompt + (
             "\n\n=== YOUR LAST REPLY WAS NOT USABLE ===\n" + "; ".join(f"{k}: {v}" for k, v in why.items())
             + ". Send the whole JSON object again with all eight answers.")
-        reply = parse_object(luna.ask(f"ch{ch['n']:02d}-a{attempt}", p))
+        reply = parse_object(luna.ask(f"ch{ch['n']:02d}-a{attempt}", p, purpose="questions-chapter"))
         answers = (reply or {}).get("answers") if isinstance((reply or {}).get("answers"), dict) else {}
         why = {}
         for qid in QIDS:
@@ -414,7 +401,7 @@ def answer_year(data: Data, luna: Luna, qid: str, question: str, chapters: list,
     why = None
     for attempt in range(2):
         p = prompt if attempt == 0 else prompt + f"\n\n=== YOUR LAST REPLY WAS NOT USABLE ===\n{why}. Send the JSON object again."
-        reply = parse_object(luna.ask(f"year-{qid}-a{attempt}", p, effort="medium"))
+        reply = parse_object(luna.ask(f"year-{qid}-a{attempt}", p, effort=luna.year_effort, purpose="questions-year"))
         why = None
         if not reply or not isinstance(reply.get("text"), str):
             why = "the reply was not one JSON object with text"
@@ -594,17 +581,34 @@ def numbers_text(data: Data, qid: str, nums) -> str:
 # ---------------------------------------------------------------- run
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data", required=True, help="local copy of the served data/ folder")
-    ap.add_argument("--cache", required=True, help="reply cache (scratch)")
-    ap.add_argument("--out", required=True, help="questions.json to write")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--root", default=swarm_paths.work_default(), help="the work area (default $SWARM_WORK)")
+    ap.add_argument("--data", help="the served data/ folder (default <root>/bundle/data)")
+    ap.add_argument("--cache", help="reply cache (default <root>/questions/cache)")
+    ap.add_argument("--out", help="questions.json to write (default <root>/questions/questions.json)")
+    ap.add_argument("--md", help="the Markdown answers (default <root>/questions/QUESTIONS.md)")
     ap.add_argument("--parallel", type=int, default=6)
-    ap.add_argument("--effort", default="low", help="reasoning effort for chapter calls (the book uses low)")
+    ap.add_argument("--effort", default=None, help="reasoning effort for chapter calls, sent to an endpoint as "
+                                                   "reasoning_effort (the real run used low)")
+    ap.add_argument("--year-effort", default=None, help="reasoning effort for the year calls (the real run used medium)")
     ap.add_argument("--only", help="comma list of chapter numbers (pilot); skips the year calls")
-    ap.add_argument("--md", help="also write the Markdown answers here (docs/QUESTIONS.md)")
+    swarm_llm.add_args(ap, timeout=600)
     a = ap.parse_args(argv)
+    if not (a.data and a.cache and a.out):
+        root = swarm_paths.need_work(a.root)
+        a.data = a.data or os.path.join(root, "bundle", "data")
+        a.cache = a.cache or os.path.join(root, "questions", "cache")
+        a.out = a.out or os.path.join(root, "questions", "questions.json")
+        a.md = a.md or os.path.join(root, "questions", "QUESTIONS.md")
+    for name, step in (("bundle.json", "build_bundle.py"), ("book.json", "build_bundle.py after the book steps")):
+        if not isinstance(load(os.path.join(a.data, name)), dict):
+            print(f"{name} missing from the served bundle: run {step}", file=sys.stderr)
+            return 2
     data = Data(a.data)
-    luna = Luna(a.cache, a.effort)
+    llm = swarm_llm.from_args(a)
+    print(f"model client: {llm.describe()}", flush=True)
+    luna = Luna(a.cache, a.effort, llm)
+    luna.year_effort = a.year_effort
     chapters = data.chapters
     if a.only:
         keep = {int(x) for x in a.only.split(",")}
@@ -620,7 +624,7 @@ def main(argv=None):
     with ThreadPoolExecutor(a.parallel) as ex:
         years = dict(zip(QIDS, ex.map(lambda q: answer_year(data, luna, q[0], q[1], done,
                                                             numbers_text(data, q[0], nums.get(q[0]))), QUESTIONS)))
-    out = {"schema": "swarm-questions/1", "generated": utcnow(), "model": MODEL, "questions": []}
+    out = {"schema": "swarm-questions/1", "generated": utcnow(), "model": llm.model, "questions": []}
     for qid, q, _ in QUESTIONS:
         out["questions"].append({
             "id": qid, "text": q,
@@ -636,6 +640,8 @@ def main(argv=None):
         write_md(out, data, a.md)
     failed = sum(len(c["failed"]) for c in done)
     nothing = sum(1 for q in out["questions"] for c in q["chapters"] if c["text"] == NOTHING)
+    print(f"wrote {a.out}" + (f" and {a.md}" if a.md else "") + "; the next build_bundle.py serves it as data/questions.json",
+          flush=True)
     print(json.dumps({"calls": luna.calls, "cached": luna.cached, "tokens": dict(luna.tokens),
                       "chapters": len(done), "answers_failed_after_retry": failed, "nothing_recorded": nothing,
                       "year_failed": [q for q in QIDS if years[q].get("failed")], "problems": problems,
@@ -659,7 +665,7 @@ def write_md(out: dict, data: Data, path: str):
              "to the source rows the served book already cites (`chat:` a chat message, `sum:` an AI Digest "
              "summary, `cus:` a computer session, `ev:` an event). Humans are never individuals here.",
              "", f"Made by `docs/questions/make_questions.py` on {out['generated']}; the page reads "
-             "`web/public/questions/questions.json`. Data: AI Digest / AI Village (theaidigest.org/village).", ""]
+             f"`data/questions.json`. {data.bundle['manifest'].get('cite') or ''}".rstrip(), ""]
     for q in out["questions"]:
         said = [c for c in q["chapters"] if c["text"] != NOTHING]
         lines += [f"## {q['text']}", "", f"{q['year']['text']} {marks(q['year']['cites'])}".strip(), "",

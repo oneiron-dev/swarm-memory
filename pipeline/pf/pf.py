@@ -3,22 +3,23 @@
 
 The model is a token classifier (classes private_person, private_email, private_phone, private_url,
 private_address, account_number, private_date, secret). It misses uncommon names and over-redacts public entities,
-so its hits are candidates for review, never verdicts. Everything this tool writes stays on our machines: nothing
-here is served or committed. Prints counts only.
+so its hits are candidates for review, never verdicts. Everything this tool writes stays in the work area (--root,
+default $SWARM_WORK): nothing here is served or committed. Prints counts only.
 
   collect   every string value, object key and file name of a built bundle, deduped, each with its locations
             (`<file>#$["k"][0]` for a value, `<file>#$["k"]#key` for a key of the object at that path,
             `<file>#name` for a file name)
-  run       the model over those strings (Mac mini, MLX): strings over 4,000 characters are split on sentence
+  run       the model over those strings (Apple Silicon only: MLX): strings over 4,000 characters are split on sentence
             ends; constrained Viterbi decoding at the model's default operating point (all transition biases 0)
   filter    drop agent and model names, redaction tokens, the builder's public keep lists and allowlists, dates,
             URLs without an account path and city/country-only addresses; check person spans against the
-            redaction lists (Arch: meta/)
-  classify  distinct new person, account and secret spans through gpt-5.6-luna exactly as human_ids.py classify
-            does (prime-agent, batches of 100, responseModel verified)
-  review    numbered list of Luna's human_individual hits (p<n>) with one context each, for a manual verdict
-  write     meta/pf_candidates.json from the review file (one "p<n> accept|reject <reason>" per line), the kept
-            hits as JSONL and the summary as Markdown
+            redaction lists (--lists, default $SWARM_LISTS or <root>/meta)
+  classify  distinct new person, account and secret spans through the model exactly as human_ids.py classify
+            does (--endpoint, --prime-agent or --mock; batches of 100; the reply's model verified)
+  review    numbered list of the classifier's human_individual hits (p<n>) with one context each, for a manual
+            verdict; refuses while a classify round is unfinished or candidates were never sent (--allow-incomplete)
+  write     <lists>/pf_candidates.json from the review file (one "p<n> accept|reject <reason>" per line), the
+            accepted ids merged into <lists>/extra_human_ids.json, the kept hits as JSONL and the summary as Markdown
 """
 from __future__ import annotations
 
@@ -30,8 +31,10 @@ import re
 import sys
 import time
 
-ROOT = "/home/lexi/calc-nvme/hackathon-20261004"
 BUNDLE_CODE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bundle")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+import swarm_llm  # noqa: E402
+import swarm_paths  # noqa: E402
 MAX_CHARS = 4000
 CONTEXT = 120  # characters of context per span (half either side)
 TOKEN_BUDGET = 16384  # tokens per forward batch
@@ -288,6 +291,15 @@ def batches_of(units: list, lengths: list):
 
 
 def cmd_run(a):
+    try:
+        import mlx.core as mx  # noqa: F401
+    except ImportError:
+        raise SystemExit("run: needs MLX, which runs on Apple Silicon only (pip install -r pipeline/pf/requirements.txt "
+                         "on a Mac with an M-series chip). Elsewhere, run openai/privacy-filter with its own PyTorch "
+                         "tooling and write <work>/raw.jsonl in the same shape, or skip this sweep and say so.")
+    if not a.model or not os.path.isdir(a.model):
+        raise SystemExit("run: --model must be a local checkout of mlx-community/openai-privacy-filter-bf16 "
+                         "(huggingface-cli download mlx-community/openai-privacy-filter-bf16 --local-dir <dir>)")
     import mlx.core as mx
     import numpy as np
     from mlx_embeddings.utils import load
@@ -366,10 +378,10 @@ def cmd_run(a):
 
 # ---------------------------------------------------------------- filter
 
-def load_lists(root: str, data: str):
+def load_lists(root: str, data: str, lists: str | None = None):
     sys.path.insert(0, BUNDLE_CODE)
     from build_bundle import PROFILE_ALLOW, PROFILE_ROUTES, PUBLIC_HANDLES, load_extra_ids, load_human_names, load_rules
-    meta = os.path.join(root, "meta")
+    meta = lists or os.path.join(root, "meta")
     rules = load_rules(os.path.join(meta, "extra_human_rules.json"))
     bundle = read_json(os.path.join(data, "bundle.json"))
     agents = [r for r in bundle["agents"] if r.get("id") != "human"]
@@ -462,7 +474,7 @@ def list_hit(n: str, names: dict, words: dict) -> tuple:
 
 
 def cmd_filter(a):
-    L = load_lists(a.root, a.data)
+    L = load_lists(a.root, a.data, a.lists)
     strings = {r["sid"]: r for r in read_jsonl(os.path.join(a.work, "strings.jsonl"))}
     raw = read_jsonl(os.path.join(a.work, "raw.jsonl"))
     before_cls, after_cls = collections.Counter(), collections.Counter()
@@ -568,31 +580,64 @@ def cmd_classify(a):
                 f.write(json.dumps({"i": i, "text": r["text"], "label": r["label"], "count": r["count"],
                                     "aliases": r["aliases"], "example": r["example"][:CONTEXT], "agent": None},
                                    ensure_ascii=False) + "\n")
-    ns = argparse.Namespace(work=work_ids, root=a.root, prime_agent=a.prime_agent, provider=a.provider,
-                            thinking=a.thinking, timeout=a.timeout, parallel=a.parallel, attempts=a.attempts)
+    ns = argparse.Namespace(work=work_ids, root=a.root, llm=swarm_llm.from_args(a), parallel=a.parallel,
+                            attempts=a.attempts)
     human_ids.cmd_classify(ns)
     open(os.path.join(work_ids, "done"), "w").close()
 
 
 # ---------------------------------------------------------------- review and write
 
+def unclassified(work: str) -> tuple:
+    """(rounds without a done mark, current candidates no round sent): what review needs to be empty first."""
+    current = {norm(r["text"]) for r in read_jsonl(os.path.join(work, "candidates.jsonl"))}
+    sent, open_rounds = set(), []
+    for d in rounds(work):
+        sent |= {norm(r["text"]) for r in read_jsonl(os.path.join(d, "candidates.jsonl"))}
+        if not os.path.exists(os.path.join(d, "done")):
+            open_rounds.append(os.path.basename(d))
+    return open_rounds, sorted(current - sent)
+
+
 def cmd_review(a):
-    """Luna's human_individual hits of every round that are still candidates after the latest filter."""
+    """The classifier's human_individual hits of every round that are still candidates after the latest filter."""
+    if not os.path.exists(os.path.join(a.work, "candidates.jsonl")):
+        raise SystemExit(f"review: no {a.work}/candidates.jsonl: run `filter` first")
+    open_rounds, never = unclassified(a.work)
+    if (open_rounds or never) and not a.allow_incomplete:
+        raise SystemExit(f"review: {len(never)} candidates were never classified and {len(open_rounds)} classify "
+                         f"rounds are unfinished ({', '.join(open_rounds) or 'none'}); run `classify` first (or pass "
+                         f"--allow-incomplete). Without it the review would drop them silently.")
     current = {norm(r["text"]): r for r in read_jsonl(os.path.join(a.work, "candidates.jsonl"))}
     whys = collections.defaultdict(list)
     for d in rounds(a.work):
         sent = {r["i"]: r for r in read_jsonl(os.path.join(d, "candidates.jsonl"))}
+        if not os.path.exists(os.path.join(d, "classified.jsonl")):
+            continue
         for l in open(os.path.join(d, "classified.jsonl")):
             for h in json.loads(l)["hits"]:
                 whys[norm(sent[h["i"]]["text"])].append(h.get("why"))
     hits = sorted((dict(current[n], why=w) for n, w in whys.items() if n in current), key=lambda h: -h["count"])
     out = {f"p{k}": h for k, h in enumerate(hits, 1)}
     write_json(os.path.join(a.work, "review.json"), out)
-    print(f"review: {len(out)} human_individual hits of {len(current)} candidates -> {a.work}/review.json")
+    with open(os.path.join(a.work, "review-template.txt"), "w") as f:
+        f.write("# One line per hit: p<n> accept <reason> | p<n> reject <reason> (accept:<id> names the id inside a "
+                "longer span).\n# An id in a class the classifier did not see: + <id> | <reason>. Every p<n> needs a "
+                "verdict; an empty file is right when there are no hits.\n")
+        for k, h in out.items():
+            f.write(f"# {k}: {h['text']!r} ({h['label']}, {h['count']}x) {h['example'][:160]!r}\n{k} reject <reason>\n")
+    print(f"review: {len(out)} human_individual hits of {len(current)} candidates -> {a.work}/review.json "
+          f"(template: {a.work}/review-template.txt)")
 
 
 def cmd_write(a):
     hits = read_json(os.path.join(a.work, "review.json"))
+    if hits is None:
+        raise SystemExit(f"write: no {a.work}/review.json: run `review` first")
+    if not a.review or not os.path.exists(a.review):
+        raise SystemExit(f"write: no review file {a.review!r}; start from {a.work}/review-template.txt (an empty file "
+                         f"when review found no hits)")
+    lists = getattr(a, "lists", None) or os.path.join(a.root, "meta")
     verdicts = {}
     extra = []
     for line in open(a.review):
@@ -613,7 +658,12 @@ def cmd_write(a):
         raise SystemExit(f"{len(missing)} hits have no verdict")
     accepted = sorted({" ".join(ident.split()).lstrip("@") for v, _, ident in verdicts.values() if v == "accept"}
                       | {" ".join(ident.split()) for ident, _ in extra if ident}, key=str.lower)
-    write_json(os.path.join(a.root, "meta", "pf_candidates.json"), accepted)
+    write_json(os.path.join(lists, "pf_candidates.json"), accepted)
+    extra_path = os.path.join(lists, "extra_human_ids.json")
+    extra = read_json(extra_path, []) or []
+    merged = sorted({" ".join(x.split()) for x in list(extra) + accepted if isinstance(x, str) and x.strip()},
+                    key=str.lower)
+    write_json(extra_path, merged)
     kept = read_jsonl(os.path.join(a.work, "kept.jsonl"))
     with open(os.path.join(a.out, "pf-hits.jsonl"), "w") as f:
         for h in kept:
@@ -624,8 +674,8 @@ def cmd_write(a):
     luna = [r for d in rounds(a.work) for r in read_jsonl(os.path.join(d, "classified.jsonl"))]
     with open(os.path.join(a.out, "pf-summary.md"), "w") as f:
         f.write(summary_md(st, luna, hits, verdicts, extra, len(accepted)))
-    print(f"write: {len(accepted)} accepted ids -> meta/pf_candidates.json; {len(kept)} kept spans and the summary "
-          f"-> {a.out}")
+    print(f"write: {len(accepted)} accepted ids -> {lists}/pf_candidates.json, merged into extra_human_ids.json "
+          f"({len(merged) - len(set(extra))} new); {len(kept)} kept spans and the summary -> {a.out}")
 
 
 def table(counter_before: dict, counter_after: dict, head: str) -> str:
@@ -675,7 +725,7 @@ def summary_md(st, luna, hits, verdicts, extra, n_accepted) -> str:
             f"- {fl.get('new_candidates')} new candidates ({fl.get('new_by_class')}) in {len(luna)} batches; "
             f"{len(hits)} labelled human_individual; tokens {tot_in} in, {tot_out} out; model "
             f"{sorted({x.get('model') for x in luna})}.",
-            f"- Review: {n_accepted} accepted (written to Arch `meta/pf_candidates.json`, not merged), "
+            f"- Review: {n_accepted} accepted (written to `pf_candidates.json` and merged into `extra_human_ids.json`), "
             f"{sum(1 for v, _, _ in verdicts.values() if v == 'reject')} rejected.", "",
             "## Accepted candidates", "", "| # | identifier | class | count | reason | context |", "|---|---|---|---:|---|---|"]
     for k, h in hits.items():
@@ -695,20 +745,21 @@ def summary_md(st, luna, hits, verdicts, extra, n_accepted) -> str:
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=("collect", "run", "filter", "classify", "review", "write"))
-    ap.add_argument("--root", default=ROOT)
+    ap.add_argument("--root", default=swarm_paths.work_default(), help="the work area (default $SWARM_WORK)")
+    ap.add_argument("--lists", help="redaction-list dir (default $SWARM_LISTS or <root>/meta)")
     ap.add_argument("--data", help="built bundle data dir (default <root>/bundle/data)")
     ap.add_argument("--work", help="work dir (default <root>/pf)")
     ap.add_argument("--model", help="`run`: local MLX checkpoint dir (mlx-community/openai-privacy-filter-bf16)")
     ap.add_argument("--limit", type=int, default=0, help="`run`: only the first N strings (smoke test)")
     ap.add_argument("--review", help="`write`: review file")
     ap.add_argument("--out", help="`write`: where pf-hits.jsonl and pf-summary.md go (default <work>)")
-    ap.add_argument("--prime-agent", default="prime-agent")
-    ap.add_argument("--provider", default="cpa-r")
-    ap.add_argument("--thinking", default="low")
-    ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--allow-incomplete", action="store_true", help="`review`: list hits while classify is unfinished")
     ap.add_argument("--parallel", type=int, default=4)
     ap.add_argument("--attempts", type=int, default=4)
+    swarm_llm.add_args(ap, timeout=600, model_flag="--llm-model")
     a = ap.parse_args(argv)
+    a.root = swarm_paths.need_work(a.root)
+    a.lists = swarm_paths.lists_dir(a.root, a.lists)
     a.data = a.data or os.path.join(a.root, "bundle", "data")
     a.work = a.work or os.path.join(a.root, "pf")
     a.out = a.out or a.work

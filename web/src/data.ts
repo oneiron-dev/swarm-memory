@@ -53,6 +53,11 @@ export interface Source { time: string; agent: string | null; room: string | nul
 export type SourcesFile = Record<string, Source>
 export interface Finding { title: string; body: string; cites: Cite[]; view?: string }
 
+// The real run's bundle (AI Digest / AI Village) keeps its own wording; any other archive gets its manifest's credit
+// line (pipeline/slice/from_jsonl.py --cite) and plain wording.
+export const isVillage = (m: Manifest) => (m.dataset || '').startsWith('aidigestorg/ai-village')
+export const credit = (m: Manifest) => (isVillage(m) ? 'Data: AI Digest / AI Village' : (m.cite || `Data: ${m.dataset}`).replace(/\.$/, ''))
+
 // One fetch per path, shared by every caller; a missing file resolves to null.
 const cache = new Map<string, Promise<unknown>>()
 export function load<T>(path: string): Promise<T | null> {

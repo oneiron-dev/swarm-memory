@@ -8,3 +8,5 @@ data/*
 !data/.keep
 __pycache__/
 *.pyc
+.venv/
+.smoke-work/

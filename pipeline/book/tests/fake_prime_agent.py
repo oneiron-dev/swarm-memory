@@ -58,6 +58,8 @@ elif "=== BEATS (number: text) ===" in stdin:  # stage: `stagebad` is wrong on a
         text = json.dumps(bad)
     else:
         text = "```json\n" + json.dumps(good) + "\n```"
+elif "=== CHAT LINES ===" in stdin:  # pairs: one sentence naming both, citing the first line
+    text = json.dumps({"text": "Agent Alpha and the humans talked about the pretend oven that day.", "cites": [1]})
 elif "=== PARAGRAPH ===" in stdin:  # hooks: `hookbad` is wrong on a first ask and right on the retry,
     good = {"hook": "Sixteen loaves of fake bread, and an oven that broke at the end",  # `hookworse` always
             "beats": [{"text": "Agent Alpha baked fake bread for the room [1].", "cites": [1]},

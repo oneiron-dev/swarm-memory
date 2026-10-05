@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Find usernames, handles and email-like ids of individual humans for meta/extra_human_ids.json (Arch only).
+"""Find usernames, handles and email-like ids of individual humans for <lists>/extra_human_ids.json.
 
 human_names.py lists display names; a person can also appear by a username or handle that is no display name
 (a GitHub handle, an X account). This tool finds such ids so the build can redact them like rare names.
-Everything it writes stays on Arch beside the work area: never committed, never served. Prints counts only.
+Everything it writes stays in the work area: never committed, never served. Prints counts only.
+The work area is --root (default $SWARM_WORK); the lists are in --lists (default $SWARM_LISTS or <root>/meta).
 
   candidates  entity surfaces of a built bundle (text, label, count, aliases, one example of <= 200 chars)
-  classify    an LLM (gpt-5.6-luna through prime-agent) marks each surface human_individual or other; a reply
-              whose n_items is not the batch size, or that is malformed, is retried and never saved as done
+  classify    a model (--endpoint, --prime-agent or --mock; pipeline/common/swarm_llm.py) marks each surface
+              human_individual or other; a reply whose n_items is not the batch size, or that is malformed, is
+              retried and never saved as done
   scan        handle-shaped tokens (@word, word-dev, word123, word_word) near human words in served text
-  hits        numbered list of classifier hits (h<n>) and scan candidates (s<n>) for review
-  write       meta/extra_human_ids.json from the review file (one "<h|s><n> accept|reject <reason>" per line)
+  hits        numbered list of classifier hits (h<n>) and scan candidates (s<n>) for review, and a review template
+              beside it (review-template.txt); refuses while classify has batches left (--allow-incomplete overrides)
+  write       <lists>/extra_human_ids.json from the review file (one "<h|s><n> accept|reject <reason>" per line;
+              every h<n> needs a verdict; an empty file is right when hits found nothing)
   redteam     fold a privacy red-team's leak rows ({file, ref_or_path, identifier, kind, context, confidence}, high
               and medium) into meta/extra_human_ids.json and meta/extra_human_rules.json; the review file names the
               exceptions, one "<exact|cap|at|drop|reject> <identifier> | <reason>" per line (default: any case)
@@ -23,16 +27,17 @@ import concurrent.futures
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+import swarm_llm  # noqa: E402
+import swarm_paths  # noqa: E402
 from build_bundle import (PROFILE_RE, PROFILE_ROUTES, STOP_WORDS, SUBDOMAIN_RE, as_list, fold,  # noqa: E402
                           tokens_of)
 
-ROOT = "/home/lexi/calc-nvme/hackathon-20261004"
-MODEL = "gpt-5.6-luna"
+MODEL = swarm_llm.DEFAULT_MODEL  # the real run's model; each saved batch records the model that answered
 BATCH = 100
 SNIPPET = 200
 HUMAN_WORDS = re.compile(r"\b(?:humans?|volunteers?|contributors?|viewers?|authors?|followers?|users?|teams?|groups?|"
@@ -111,35 +116,23 @@ def cmd_candidates(a):
 
 
 def call_luna(stdin_text: str, task: str, a) -> dict:
-    cmd = [a.prime_agent, "-p", "--mode", "json", "--json-event-profile", "factory-completed",
-           "--provider", a.provider, "--model", MODEL, "--thinking", a.thinking,
-           "--no-tools", "--no-session", "-ns", "-np", "-nc", "--system-prompt", SYSTEM, task]
-    p = subprocess.run(cmd, input=stdin_text, capture_output=True, text=True, timeout=a.timeout, cwd=a.cwd)
-    msg = None
-    for line in p.stdout.splitlines():
-        if '"agent_end"' not in line[:40]:
-            continue
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            continue
-        for m in ev.get("messages", []):
-            if m.get("role") == "assistant":
-                msg = m
-    if msg is None or msg.get("stopReason") == "error":
-        raise RuntimeError(f"exit {p.returncode}: no assistant message")
-    if msg.get("responseModel") != MODEL:
-        raise SystemExit(f"responseModel {msg.get('responseModel')!r} != {MODEL}: stopping")
-    text = "\n".join(c.get("text", "") for c in msg.get("content", []) if c.get("type") == "text").strip()
-    m = re.search(r"\{.*\}", text, re.S)
-    usage = msg.get("usage") or {}
-    return {"reply": json.loads(m.group(0)) if m else None, "model": msg["responseModel"],
-            "in": usage.get("input", 0) + usage.get("cacheRead", 0), "out": usage.get("output", 0)}
+    """One classify call through the configured client: {"reply": the JSON object or None, "model", "in", "out"}.
+    A model other than the one asked for stops the run."""
+    try:
+        res = a.llm.call(stdin_text, task, SYSTEM, json_mode=True, purpose="classify", cwd=getattr(a, "cwd", None))
+    except swarm_llm.ModelMismatch as e:
+        raise SystemExit(f"{e}: stopping")
+    except swarm_llm.CallError as e:
+        raise RuntimeError(str(e)[:300])
+    m = re.search(r"\{.*\}", res["text"], re.S)
+    return {"reply": json.loads(m.group(0)) if m else None, "model": res["model"], "in": res["in"], "out": res["out"]}
 
 
 def cmd_classify(a):
     with open(os.path.join(a.work, "candidates.jsonl")) as f:
         rows = [json.loads(l) for l in f]
+    if getattr(a, "llm", None) is None:
+        a.llm = swarm_llm.from_args(a)
     agents = as_list(read_json(os.path.join(a.root, "meta", "agents.json")), "agents")
     task = TASK.format(agents=", ".join(f"{r.get('name')} ({r.get('id')})" for r in agents))
     send = [r for r in rows if not r["agent"]]
@@ -169,7 +162,7 @@ def cmd_classify(a):
             t0 = time.time()
             try:
                 res = call_luna(stdin, task, a)
-            except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
+            except (RuntimeError, ValueError) as e:
                 print(f"batch {k}: attempt {attempt + 1} failed ({e.__class__.__name__})", flush=True)
                 continue
             reply = res["reply"]
@@ -257,11 +250,42 @@ def cmd_scan(a):
     print(f"scan: {len(found)} handle-shaped tokens, {len(keep)} near a human word or @-prefixed")
 
 
+def classify_left(work: str) -> tuple:
+    """(batches classify must still finish, batches in all) for the candidates in `work`: what `hits` needs before
+    "no hits" can mean "nothing found"."""
+    path = os.path.join(work, "candidates.jsonl")
+    if not os.path.exists(path):
+        return None, 0
+    with open(path) as f:
+        rows = [json.loads(l) for l in f if l.strip()]
+    send = [r for r in rows if not r.get("agent")]
+    batches = [send[k:k + BATCH] for k in range(0, len(send), BATCH)]
+    done = set()
+    saved = os.path.join(work, "classified.jsonl")
+    if os.path.exists(saved):
+        with open(saved) as f:
+            for l in f:
+                if l.strip():
+                    r = json.loads(l)
+                    if complete(r, batches):
+                        done.add(r["batch"])
+    return len(batches) - len(done), len(batches)
+
+
 def cmd_hits(a):
+    left, total = classify_left(a.work)
+    if left is None:
+        raise SystemExit(f"hits: no {a.work}/candidates.jsonl: run `candidates` first")
+    if left and not a.allow_incomplete:
+        raise SystemExit(f"hits: classify finished {total - left} of {total} batches; run `classify` until it "
+                         f"reports every batch complete (or pass --allow-incomplete to list the partial hits anyway). "
+                         f"Without it, \"0 hits\" would mean \"not checked\", not \"clean\".")
     cands = {json.loads(l)["i"]: json.loads(l) for l in open(os.path.join(a.work, "candidates.jsonl"))}
     # the union of every classify run given (same candidates), and of every saved reply, an incomplete one too
     whys = collections.defaultdict(list)
     for work in [a.work] + (a.merge or []):
+        if not os.path.exists(os.path.join(work, "classified.jsonl")):
+            continue
         for l in open(os.path.join(work, "classified.jsonl")):
             for h in json.loads(l)["hits"]:
                 whys[h["i"]].append(h.get("why"))
@@ -275,11 +299,27 @@ def cmd_hits(a):
     for k, s in enumerate(read_json(os.path.join(a.work, "scan.json"), []), 1):
         out[f"s{k}"] = s
     write_json(os.path.join(a.work, "hits.json"), out)
-    print(f"hits: {len(hits)} classifier hits, {len(out) - len(hits)} scan candidates -> {a.work}/hits.json")
+    with open(os.path.join(a.work, "review-template.txt"), "w") as f:
+        f.write("# One line per hit: <key> accept <reason> | <key> reject <reason>. Every h<n> needs a verdict;\n"
+                "# s<n> (scan candidates) are optional. An id you found yourself: + accept <id> | <reason>.\n"
+                "# Copy this file to review.txt, decide each line, then run `write --review <file>`.\n")
+        for k, h in out.items():
+            f.write(f"# {k}: {h.get('text')!r} ({h.get('label', 'scan')}, {h.get('count', h.get('n'))}x) "
+                    f"{(h.get('example') or ' | '.join(h.get('ctx') or []))[:160]!r}\n")
+            if k.startswith("h"):
+                f.write(f"{k} reject <reason>\n")
+    print(f"hits: {len(hits)} classifier hits, {len(out) - len(hits)} scan candidates -> {a.work}/hits.json "
+          f"(review template: {a.work}/review-template.txt)")
 
 
 def cmd_write(a):
     hits = read_json(os.path.join(a.work, "hits.json"))
+    if hits is None:
+        raise SystemExit(f"write: no {a.work}/hits.json: run `hits` first")
+    if not a.review or not os.path.exists(a.review):
+        raise SystemExit(f"write: no review file {a.review!r}. Start from {a.work}/review-template.txt: one line per "
+                         f"hit, \"h1 accept <reason>\" or \"h1 reject <reason>\"; when hits found nothing, an empty "
+                         f"file is the review (touch it)")
     accept, reject, extra = [], [], []
     for line in open(a.review):
         line = line.strip()
@@ -300,8 +340,8 @@ def cmd_write(a):
     if missing:
         raise SystemExit(f"{len(missing)} classifier hits have no verdict")
     ids = sorted({" ".join(x.split()) for x in extra if x.strip()}, key=str.lower)
-    write_json(os.path.join(a.root, "meta", "extra_human_ids.json"), ids)
-    print(f"write: {len(ids)} ids ({len(accept)} accepted, {len(reject)} rejected) -> meta/extra_human_ids.json")
+    write_json(os.path.join(a.lists, "extra_human_ids.json"), ids)
+    print(f"write: {len(ids)} ids ({len(accept)} accepted, {len(reject)} rejected) -> {a.lists}/extra_human_ids.json")
 
 
 SLUG_HOSTS = ("telegra.ph", "prnewswire.com", "medium.com", "wordpress.com/20")  # the post slug carries the name
@@ -345,7 +385,17 @@ def leak_path(r: dict, data: str):
 
 
 def cmd_redteam(a):
-    rows = [json.loads(l) for l in open(a.leaks)]
+    if not a.leaks:
+        raise SystemExit("redteam needs --leaks <the red-team's leak rows, JSONL> (SKILL.md section 5.5)")
+    if not os.path.isfile(a.leaks):
+        raise SystemExit(f"no leaks file at {a.leaks}: the red-team writes one JSON row per leak it finds there "
+                         f"(SKILL.md section 5.5). A clean round is an empty file: mkdir -p "
+                         f"{os.path.dirname(a.leaks) or '.'} && : > {a.leaks}")
+    for path, what in ((a.review, "--review"), (a.keep, "--keep")):
+        if path and not os.path.isfile(path):
+            raise SystemExit(f"no {what} file at {path}: create it (an empty review file accepts every high and "
+                             f"medium row) or leave {what} out")
+    rows = [json.loads(l) for l in open(a.leaks) if l.strip()]
     rows = [r for r in rows if r.get("confidence") in ("high", "medium")]
     keep = [k.strip() for k in open(a.keep)] if a.keep else []  # public figures: never redacted
     keep = [k for k in keep if k and not k.startswith("#")]
@@ -360,8 +410,8 @@ def cmd_redteam(a):
         if verdict not in ("exact", "cap", "at", "drop", "reject") or not ident.strip() or not why.strip():
             raise SystemExit(f"bad review line ({verdict})")
         verdicts[ident.strip()] = verdict
-    extra = set(read_json(os.path.join(a.root, "meta", "extra_human_ids.json"), []))
-    rules = read_json(os.path.join(a.root, "meta", "extra_human_rules.json"), {}) or {}
+    extra = set(read_json(os.path.join(a.lists, "extra_human_ids.json"), []))
+    rules = read_json(os.path.join(a.lists, "extra_human_rules.json"), {}) or {}
     exact, ids, drop = set(rules.get("exact", [])), set(rules.get("ids", [])), set(rules.get("drop_entities", []))
     cap = set(rules.get("cap", []))
     at = {(r["file"], r["path"], r["token"]) for r in rules.get("at", [])}
@@ -402,7 +452,7 @@ def cmd_redteam(a):
     extra |= set(a.add)
     extra = sorted({" ".join(x.split()) for x in extra if x.strip()}, key=str.lower)
     # profile accounts on the served site that the red-team did not flag (orgs, agents, projects) stay
-    flagged = " ".join(json.loads(l)["identifier"].lower() for l in open(a.leaks))
+    flagged = " ".join(json.loads(l)["identifier"].lower() for l in open(a.leaks) if l.strip())
     low_extra = {x.lower() for x in extra}
     allow = set(rules.get("profile_allow", []))
     for _, s in served_strings(a.data):
@@ -412,8 +462,8 @@ def cmd_redteam(a):
             seg = m.group(1).lower()
             if seg not in flagged and seg not in low_extra and seg not in PROFILE_ROUTES and seg != "human":
                 allow.add(seg)
-    write_json(os.path.join(a.root, "meta", "extra_human_ids.json"), extra)
-    write_json(os.path.join(a.root, "meta", "extra_human_rules.json"),
+    write_json(os.path.join(a.lists, "extra_human_ids.json"), extra)
+    write_json(os.path.join(a.lists, "extra_human_rules.json"),
                {"exact": sorted(exact), "cap": sorted(cap), "ids": sorted(ids),
                 "keep": sorted(set(rules.get("keep", [])) | set(keep), key=str.lower), "drop_entities": sorted(drop), "profile_allow": sorted(allow),
                 "at": [{"file": f, "path": p, "token": t} for f, p, t in sorted(at)]})
@@ -424,7 +474,8 @@ def cmd_redteam(a):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=("candidates", "classify", "scan", "hits", "write", "redteam"))
-    ap.add_argument("--root", default=ROOT)
+    ap.add_argument("--root", default=swarm_paths.work_default(), help="the work area (default $SWARM_WORK)")
+    ap.add_argument("--lists", help="redaction-list dir (default $SWARM_LISTS or <root>/meta)")
     ap.add_argument("--data", help="built bundle data dir (default <root>/bundle/data)")
     ap.add_argument("--work", help="work dir (default <root>/human_ids)")
     ap.add_argument("--review", help="review file for `write` and `redteam`")
@@ -432,15 +483,18 @@ def main(argv=None):
     ap.add_argument("--add", action="append", default=[], help="`redteam`: one more reviewed id, any case (repeatable)")
     ap.add_argument("--keep", help="`redteam`: file of public figures to keep visible, one per line")
     ap.add_argument("--merge", action="append", help="`hits`: also the classify results in this work dir (repeatable)")
-    ap.add_argument("--prime-agent", default="prime-agent")
-    ap.add_argument("--provider", default="cpa-r")
-    ap.add_argument("--thinking", default="low")
-    ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--allow-incomplete", action="store_true", help="`hits`: list hits while classify has batches left")
     ap.add_argument("--parallel", type=int, default=4)
     ap.add_argument("--attempts", type=int, default=4, help="`classify`: tries per batch before it is left undone")
+    swarm_llm.add_args(ap, timeout=600)
     a = ap.parse_args(argv)
+    a.root = swarm_paths.need_work(a.root)
+    a.lists = swarm_paths.lists_dir(a.root, a.lists)
     a.data = a.data or os.path.join(a.root, "bundle", "data")
     a.work = a.work or os.path.join(a.root, "human_ids")
+    a.review = a.review or (os.path.join(a.work, "review.txt") if a.step == "write" else None)
+    if a.step in ("write", "redteam"):
+        os.makedirs(a.lists, exist_ok=True)
     os.makedirs(a.work, exist_ok=True)
     {"candidates": cmd_candidates, "classify": cmd_classify, "scan": cmd_scan, "hits": cmd_hits,
      "write": cmd_write, "redteam": cmd_redteam}[a.step](a)

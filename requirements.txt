@@ -1,0 +1,12 @@
+# The pipeline's own dependencies, every stage but the optional ones below (Python 3.12).
+#   scripts/setup.sh installs these into .venv (or $SWARM_VENV); add --tagger for the reference tagger.
+# slice: the token counter (Alibaba-NLP/gte-multilingual-mlm-base tokenizer, downloaded from Hugging Face once)
+tokenizers==0.22.1
+# bundle: English word frequencies decide which one-word human names match in any case
+wordfreq==3.1.1
+# bundle: faster JSON (optional; the stdlib json module is used without it)
+orjson==3.12.0
+# Optional, in their own files:
+#   pipeline/tag/requirements-gliner.txt   the gliner_vad reference tagger (torch, GLiNER; CPU is enough)
+#   pipeline/pf/requirements.txt           the privacy-filter sweep (MLX: Apple Silicon only)
+#   docs/charts/requirements.txt           the method charts

@@ -1,26 +1,44 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { Cite, Index } from '../data'
+import { load, type Cite, type Index } from '../data'
 import { RichText } from '../text'
 import { href } from '../route'
 
 // The questions an overseer always asks of a swarm, answered for the year and per chapter, every answer cited.
-// The file is written by the questions step from the served data; it is a model's reading of cited material.
+// The file is written by the questions step (docs/questions/make_questions.py) and served as data/questions.json
+// beside the bundle it was made from; it is a model's reading of cited material. A bundle without one falls back to
+// the copy in the web build (web/public/questions/questions.json), so the live site answers either way.
 interface QCite extends Cite { chapter?: number }
 interface Question { id: string; text: string; year: { text: string; cites: QCite[] }; chapters: { n: number; text: string; cites: Cite[] }[]; numbers?: unknown }
-interface QuestionsFile { schema: string; generated?: string; model?: string; questions: Question[] }
+export interface QuestionsFile { schema: string; generated?: string; model?: string; questions: Question[] }
+
+const usable = (j: QuestionsFile | null): QuestionsFile | null => (j && Array.isArray(j.questions) ? j : null)
+// The bundle's own answers when it has a usable file, else the web build's copy, else null.
+export function questionsFrom(bundle: () => Promise<QuestionsFile | null>,
+  build: () => Promise<QuestionsFile | null>): Promise<QuestionsFile | null> {
+  return bundle().then((j) => usable(j) ?? build().then(usable))
+}
+let questions: Promise<QuestionsFile | null> | null = null
+function loadQuestions(): Promise<QuestionsFile | null> {
+  questions ??= questionsFrom(() => load<QuestionsFile>('questions.json'),
+    () => fetch('./questions/questions.json').then((r) => (r.ok ? r.json() : null)).catch(() => null))
+  return questions
+}
 
 export function Questions({ idx }: { idx: Index }) {
   const [file, setFile] = useState<QuestionsFile | null | undefined>(undefined)
   useEffect(() => {
-    fetch('./questions/questions.json').then((r) => (r.ok ? r.json() : null)).then((j) => setFile(j && j.questions ? (j as QuestionsFile) : null)).catch(() => setFile(null))
+    let live = true
+    loadQuestions().then((j) => { if (live) setFile(j) })
+    return () => { live = false }
   }, [])
+  const nChapters = file?.questions[0]?.chapters.length ?? 0
   const chapterTitle = (n: number) => `chapter ${n}`
   return (
     <div class="stack">
       <section class="hero">
         <h1 class="place">The questions an overseer always asks</h1>
         <div class="read lede">
-          <p>Eight questions you would put to any group of agents, answered for the whole year and for each of the 51 weeks, every answer pointing at its source. The answers are a model's reading of the cited summaries, not facts.</p>
+          <p>Eight questions you would put to any group of agents, answered for the whole run and for each of its {nChapters} chapters, every answer pointing at its source. The answers are a model's reading of the cited summaries, not facts.</p>
         </div>
       </section>
       {file === undefined ? <div class="well loading">Reading the answers</div> : null}

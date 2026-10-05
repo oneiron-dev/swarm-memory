@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The book: day paragraphs, chapter stories and goal adherence by gpt-5.6-luna (docs/schema.md section 4).
 
-Reads the served bundle (already redacted), asks Luna through prime-agent, and appends every accepted reply
+Reads the served bundle (already redacted), asks the model (an OpenAI-compatible endpoint, our prime-agent harness,
+or --mock for templated text; pipeline/common/swarm_llm.py), and appends every accepted reply
 to a JSONL cache in <root>/book/, so a rerun only does what is missing. build_bundle.py turns the cache into
 data/book.json and data/adherence/<agent>.json, and computes data/talk/<agent>.json itself.
 
@@ -39,6 +40,9 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "summarize"))
 sys.path.insert(0, os.path.join(HERE, "..", "bundle"))
+sys.path.insert(0, os.path.join(HERE, "..", "common"))
+import swarm_llm  # noqa: E402
+import swarm_paths  # noqa: E402
 from summarize import MARKER, MODEL, CallError, ModelMismatch, _expand, call_luna, fold, validate  # noqa: E402
 import build_bundle as BB  # noqa: E402
 from build_bundle import (BEAT_COUNT, BEAT_WORDS, FIGURE_LABEL_WORDS, FIGURE_VALUE_CHARS, HOOK_WORDS,  # noqa: E402
@@ -47,7 +51,9 @@ from build_bundle import (BEAT_COUNT, BEAT_WORDS, FIGURE_LABEL_WORDS, FIGURE_VAL
                           epoch, figure_problem, hook_problem, pair_key, pair_problem, pick_pairs, stage_key,
                           stage_problem, text_sha)
 
-ROOT = "/home/lexi/calc-nvme/hackathon-20261004"
+PURPOSES = {"day": "day", "gap": "gap", "chapter": "chapter", "hooks": "hooks", "pair": "pair", "stage": "stage",
+            "adherence": "adherence", "rephrase": "rephrase"}
+JSON_OBJECT = frozenset({"hooks", "pair", "stage"})  # replies that are one JSON object (an endpoint's JSON mode fits)
 DIGEST_CHARS = 6000
 BATCH = 25
 SCORES = ("on", "partly", "off", "idle")
@@ -332,8 +338,9 @@ class Runner:
         for attempt in range(1, self.a.max_attempts + 1):
             if self.stop.is_set():
                 return None
+            purpose = PURPOSES.get(uid.split()[0])
             try:
-                res = call_luna(stdin_text, task, self.a, system)
+                res = call_luna(stdin_text, task, self.a, system, purpose=purpose, json_mode=purpose in JSON_OBJECT)
             except ModelMismatch as e:
                 print(f"STOP: {e} on {uid}", file=sys.stderr, flush=True)
                 self.stop.set()
@@ -1041,6 +1048,11 @@ def cmd_pairs(a, bundle: Bundle, run: Runner):
             task = retry_task(why + ". Send the whole JSON object again")
         run.append(path, {**base, "text": None, "cites": [], "why": why, "rows": len(rows[key]), "lines": len(nmap),
                           "calls": calls, "in": tin, "out": tout, "seconds": round(time.time() - t1, 1)})
+
+    run.pool(one, todo)
+    status(a, bundle)
+
+
 # ---------------------------------------------------------------- step 2d: the stage direction per chapter
 
 def stage_label(x):
@@ -1235,7 +1247,7 @@ def load_builder(a):
     """The bundler after load_meta: its name matcher, agents and room aliases, from the same meta/ lists the build
     reads."""
     argv = ["--root", a.root] + (["--meta", a.meta] if a.meta else []) + \
-        (["--common-words", a.common_words] if a.common_words else [])
+        (["--lists", a.lists] if a.lists else []) + (["--common-words", a.common_words] if a.common_words else [])
     b = BB.Builder(BB.build_parser().parse_args(argv))
     b.load_meta()
     return b
@@ -1443,15 +1455,12 @@ def status(a, bundle: Bundle):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=("days", "gaps", "chapters", "hooks", "pairs", "stage", "adherence", "rephrase", "status"))
-    ap.add_argument("--root", default=ROOT)
+    ap.add_argument("--root", default=swarm_paths.work_default(), help="the work area (default $SWARM_WORK)")
     ap.add_argument("--data", help="served bundle to read (default <root>/bundle/data)")
     ap.add_argument("--book", help="cache dir (default <root>/book)")
-    ap.add_argument("--meta", help="`rephrase`: the redaction lists (default <root>/meta)")
+    ap.add_argument("--meta", help="`rephrase`, `pairs`: the meta dir (default <root>/meta)")
+    ap.add_argument("--lists", help="`rephrase`, `pairs`: the redaction-list dir (default $SWARM_LISTS or <meta>)")
     ap.add_argument("--common-words", help="`rephrase`: JSON {word: zipf} instead of wordfreq (tests)")
-    ap.add_argument("--prime-agent", default="prime-agent")
-    ap.add_argument("--provider", default="cpa-r")
-    ap.add_argument("--thinking", default="low")
-    ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--parallel", type=int, default=8)
     ap.add_argument("--max-attempts", type=int, default=5, help="tries per call on transport errors")
     ap.add_argument("--chapter-prompt", choices=sorted(CHAPTER_PROMPTS), default="story-v2",
@@ -1461,7 +1470,11 @@ def main(argv=None):
     ap.add_argument("--content-attempts", type=int, default=3,
                     help="tries per day or chapter until a reply passes (the retry says what was wrong)")
     ap.add_argument("--limit", type=int, help="at most this many new units (days, chapters or batches)")
+    swarm_llm.add_args(ap, timeout=300)
     a = ap.parse_args(argv)
+    if a.root is None and a.data and a.book:  # both given: the work area is the one holding bundle/data
+        a.root = os.path.dirname(os.path.dirname(os.path.abspath(a.data)))
+    a.root = swarm_paths.need_work(a.root)
     a.data = a.data or os.path.join(a.root, "bundle", "data")
     a.book = a.book or os.path.join(a.root, "book")
     os.makedirs(a.book, exist_ok=True)
@@ -1471,6 +1484,10 @@ def main(argv=None):
     if a.step == "status":
         status(a, bundle)
         return
+    global MODEL
+    a.llm = swarm_llm.from_args(a)
+    MODEL = a.llm.model
+    print(f"model client: {a.llm.describe()}", flush=True)
     {"days": cmd_days, "gaps": cmd_gaps, "chapters": cmd_chapters, "hooks": cmd_hooks, "pairs": cmd_pairs, "stage": cmd_stage,
      "adherence": cmd_adherence, "rephrase": cmd_rephrase}[a.step](a, bundle, Runner(a))
 

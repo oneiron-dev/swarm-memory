@@ -20,6 +20,8 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+import swarm_paths  # noqa: E402
 from build_bundle import (BOOK_SCHEMA, BOOK_SCORES, CONTEXT_HANDLES, EXTRA_IDS, FAMILIES, MARKUP_INLINE_RE,  # noqa: E402
                           MARKUP_LINE_RE, PAIR_REF_RE, PAIR_TOP, PAIRS_SCHEMA, RULES, SCHEMA, BuildError, Names, as_list,
                           at_rule_hits, beats_problem, day_pairs, figure_problem, hook_problem, json_path,
@@ -123,7 +125,10 @@ class V:
         if self.keys(m, ("schema", "generated", "dataset", "cite", "range", "counts", "tagger", "summarizer"), "manifest"):
             self.need(m["schema"] == SCHEMA, f"manifest.schema {m['schema']!r}")
             self.need(isinstance(m["generated"], str) and ISO_Z_RE.match(m["generated"]), "manifest.generated not ISO Z")
-            self.need("AI Digest / AI Village" in (m["cite"] or ""), "manifest.cite lacks 'AI Digest / AI Village'")
+            if str(m.get("dataset") or "").startswith("aidigestorg/ai-village"):  # the source's terms ask for this credit
+                self.need("AI Digest / AI Village" in (m["cite"] or ""), "manifest.cite lacks 'AI Digest / AI Village'")
+            else:
+                self.need(isinstance(m["cite"], str) and m["cite"].strip(), "manifest.cite is empty: credit the data")
             self.keys(m["range"], ("first_day", "last_day", "first_date", "last_date"), "manifest.range")
             if self.keys(m["counts"], ("agents", "rooms", "slice_rows", "slice_tokens", "mentions", "entities", "summaries"), "manifest.counts"):
                 for k, v in m["counts"].items():
@@ -689,15 +694,27 @@ def validate(data_dir, meta_dir=None, zipf=None, untagged=None, human_names=None
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("data", nargs="?", default="/home/lexi/calc-nvme/hackathon-20261004/bundle/data")
-    ap.add_argument("--meta", help="meta/ dir with human_names.json and agents.json (default <data>/../../meta)")
+    ap.add_argument("data", nargs="?", help="the served bundle (default $SWARM_WORK/bundle/data)")
+    ap.add_argument("--meta", help="meta/ dir with agents.json (default <data>/../../meta)")
+    ap.add_argument("--lists", help="redaction-list dir (default $SWARM_LISTS or the meta dir)")
     ap.add_argument("--common-words", help="JSON {word: zipf} instead of the wordfreq package (tests)")
     args = ap.parse_args(argv)
+    if args.data is None:
+        args.data = os.path.join(swarm_paths.need_work(swarm_paths.work_default(), "a data path"), "bundle", "data")
+    if not os.path.exists(os.path.join(args.data, "bundle.json")):
+        print(f"FAIL: no bundle.json in {args.data}")
+        return 1
     meta = args.meta
     if meta is None:
         guess = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(args.data))), "meta")
         meta = guess if os.path.isdir(guess) else None
-    v = validate(args.data, meta, common_words=args.common_words)
+    lists = args.lists or os.environ.get("SWARM_LISTS") or meta
+    paths = {}
+    if lists:
+        paths = {"human_names": os.path.join(lists, "human_names.json"),
+                 "extra_ids": os.path.join(lists, EXTRA_IDS), "rules": os.path.join(lists, RULES),
+                 "context_handles": os.path.join(lists, CONTEXT_HANDLES)}
+    v = validate(args.data, meta, common_words=args.common_words, **paths)
     for w in v.warnings[:50]:
         print("WARN ", w)
     if len(v.warnings) > 50:

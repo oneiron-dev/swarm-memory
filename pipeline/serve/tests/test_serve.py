@@ -230,5 +230,27 @@ class SafePath(unittest.TestCase):
             shutil.rmtree(root)
 
 
+class Check(unittest.TestCase):
+    def test_check_needs_a_bundle_and_a_built_app_under_the_work_area(self):
+        import contextlib
+        import io
+        tmp = tempfile.mkdtemp()
+        try:
+            data = os.path.join(tmp, "bundle", "data")
+            os.makedirs(data)
+            with open(os.path.join(data, "bundle.json"), "w") as f:
+                json.dump({"manifest": MANIFEST}, f)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(serve.main(["--work", tmp, "--check"]), 1)  # no web-dist yet
+                os.makedirs(os.path.join(tmp, "web-dist"))
+                with open(os.path.join(tmp, "web-dist", "index.html"), "w") as f:
+                    f.write("<!doctype html><title>app</title>")
+                self.assertEqual(serve.main(["--work", tmp, "--check"]), 0)
+                os.remove(os.path.join(data, "bundle.json"))
+                self.assertEqual(serve.main(["--work", tmp, "--check"]), 1)  # health ok is false
+        finally:
+            shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main()

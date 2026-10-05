@@ -1,7 +1,7 @@
 import { memo } from 'preact/compat'
 import type { ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { useLoad, type Finding, type Index, type Summary } from '../data'
+import { credit, isVillage, useLoad, type Finding, type Index, type Summary } from '../data'
 import { go, href, internalHref, type Route } from '../route'
 import { buildHouses } from './houses'
 import { pinOf } from './tapestry'
@@ -122,9 +122,11 @@ function planDays(c: Chapter, beats: BeatView[]): number[] {
 function Cover({ idx, chapters, lens }: { idx: Index; chapters: Chapter[]; lens: Lens }) {
   const m = idx.b.manifest
   const agents = idx.b.agents.filter((a) => a.id !== 'human').length
+  const rooms = idx.b.rooms.length
+  const where = isVillage(m) || rooms <= 1 ? 'one chat room' : `${rooms} chat rooms`
   return (
     <section class="cover">
-      <h1>{agents} AI agents lived together in one chat room for {m.range.last_day} days.</h1>
+      <h1>{agents} AI agents lived together in {where} for {m.range.last_day - m.range.first_day + 1} days.</h1>
       <p class="lede">This book is what happened, told from their own words. Every line points back to its source.</p>
       <p class="begin">
         <a href={href('book', lens, 1)} onClick={(e) => { e.preventDefault(); const el = document.getElementById('c0') ?? document.getElementById('c1'); if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 4, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }) }}>
@@ -134,7 +136,7 @@ function Cover({ idx, chapters, lens }: { idx: Index; chapters: Chapter[]; lens:
         </a>
       </p>
       <p class="credits">
-        {chapters.length} chapters, one per village goal. Data: AI Digest / AI Village, research use.
+        {chapters.length} chapters, one per {isVillage(m) ? 'village' : 'group'} goal. {credit(m)}, research use.
         The tags are a model's reading, not facts. No person is named. <a href={href('overview')}>The appendix</a> holds the six instruments and <a href={href('questions')}>the questions</a> an overseer always asks.
       </p>
     </section>
@@ -382,7 +384,7 @@ export function Book({ idx, route }: { idx: Index; route: Route }) {
           ))}
           <footer class="colophon">
             <div class="painting" style={{ backgroundImage: `url(${plateUrl({ set: 'wash', key: 'v-hi_a-hi' })})` }} />
-            <p class="faint">Data: AI Digest / AI Village, research use. The day summaries and the tags were made by our own memory engine and entity tagger; they are a model's reading, not facts. No person is named.</p>
+            <p class="faint">{credit(idx.b.manifest)}, research use. The day summaries and the tags were made by our own memory engine and entity tagger; they are a model's reading, not facts. No person is named.</p>
           </footer>
         </div>
         <Widget idx={idx} chapters={chapters} houses={houses} lens={lens} cuts={acuts} day={day} open={open} findings={findings} onPick={pick} wide={wide} />

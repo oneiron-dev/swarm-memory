@@ -243,6 +243,17 @@ class TestRun(Base):
         prog = jload(os.path.join(self.work, "summaries", "PROGRESS.json"))
         self.assertEqual(prog["rate_limited"], 4)  # every odd call fails once, audits included
 
+    def test_mock_writes_cited_placeholders_with_no_model(self):
+        write_slice(self.work, fixture_rows())
+        self.assertEqual(S.main(["run", "--work", self.work, "--mock"]), 0)
+        recs = self.records("room") + self.records("agent")
+        self.assertTrue(recs)
+        for r in recs:
+            self.assertEqual(r["model"], "mock")
+            self.assertTrue(r["cites"])
+            self.assertIn("Placeholder text, written without a model", r["text"])
+            self.assertNotIn("Nice work", r["text"])  # the mock copies no source text
+
     def test_estimate_and_pilot(self):
         write_slice(self.work, fixture_rows())
         S.main(["estimate", "--work", self.work])

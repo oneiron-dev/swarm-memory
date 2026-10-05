@@ -1,6 +1,6 @@
 # pipeline/book: the data the book UI reads
 
-The app reads as a book: one chapter per village goal, one page per day, a cast drawer per day. `book.py` writes the texts with `gpt-5.6-luna`; `pipeline/bundle/build_bundle.py` turns them into the served files `data/book.json` and `data/adherence/<agent>.json`, and computes `data/talk/<agent>.json` itself (docs/schema.md section 4). So every served string goes through the same redaction and validator as the rest of the bundle.
+The app reads as a book: one chapter per village goal, one page per day, a cast drawer per day. `book.py` writes the texts with a model (the real run used `gpt-5.6-luna`; any OpenAI-compatible endpoint, our prime-agent, or `--mock` for templated placeholders that pass every rule below); `pipeline/bundle/build_bundle.py` turns them into the served files `data/book.json` and `data/adherence/<agent>.json`, and computes `data/talk/<agent>.json` itself (docs/schema.md section 4). So every served string goes through the same redaction and validator as the rest of the bundle.
 
 ## What it does
 
@@ -14,27 +14,25 @@ The app reads as a book: one chapter per village goal, one page per day, a cast 
 - **`stage`.** Per chapter with beats, from its paragraph and beats (as the bundler serves them, markers taken out; beats numbered from 0) and its active agents (ids and names): a stage direction for the village pen, `{"props": [{"kind", "label"}], "moments": [{"beat", "kind", "agents", "label"}]}`, with 1 to 3 props (`stall`, `mailbox`, `ballot`, `scaffold`, `gallery`, `chessboard`, `stage`, `press`, `garden`, `lanterns`, `cloud`, `signpost`: what the week was about) and 0 to 6 moments (`celebrate`, `build`, `send`, `vote`, `win`, `fail`, `gather`, `play`: only what the paragraph states happened, on the beat that tells it, with at most 4 of the chapter's agent ids, never the humans). A label is at most 3 plain words or null: no quotes or brackets, at most 32 characters, a number only when the paragraph states it. One prompt asks for one JSON object; it is checked with the bundler's `stage_problem` and, stricter, each prop kind at most once, at most one moment per beat and no label naming an agent; a failing reply is asked once more with the reason, and a stage that fails twice is saved as null with its reason in `why` (the page draws the board alone). Kinds are lowercased, an agent written by its name gets its id. One line per chapter in `stage.jsonl`, keyed by the hash of the chapter text (`src`) and of its cached beats (`beats_src`, `build_bundle.stage_key`), so new beats are asked again. Prompt versions: `stage-v2` (current: the big moments, usually 2 to 4, at most one per beat) and the `stage-v1` pilot (3 chapters), whose records stay in the file; the last line per key wins. `--only 1,3` asks named chapters.
 - **`adherence`.** Every agent-day summary (text without `[n]`), 25 per call: `on`, `partly`, `off` or `idle` and a note of at most 15 words. The whole reply must parse as a JSON array (an object around it or prose beside it is a bad reply) of exactly the items sent, with integer indices (not booleans) and known scores; otherwise it is retried once; then its items go to `adherence-null.jsonl` (served as `"score": null`) and are tried again on the next run. A bad batch is never saved as done.
 - **`rephrase`.** Runs the bundler's redaction for book text (the same `meta/` lists, the untagged rules) over every day text, chapter title, chapter text, hook, beat, figure label, pair sentence and adherence note. Where it would add a chip (`[human]`, `[email]`, `[id]`) that Luna's own text does not carry, Luna gets the sentences (or the title or note) that gain one (one call per day or chapter, 25 notes per call), with the words the filter cuts, and rewords them once with a plain synonym, keeping every fact and every `[n]`. The rewording is accepted only if the redaction then adds no chip and the cite numbers are the same; otherwise the redacted version stays. Each decision is one line in `rewrites.jsonl`, keyed by the hash of the exact text it was made from, so a rerun asks nothing twice and a rewrite never applies to a changed text. The bundler applies the accepted ones (in a chain) before its own redaction, which still runs. Run it after `days` and `chapters`, and again whenever the redaction lists change.
-- **Calls.** prime-agent with `--provider cpa-r --no-tools`, the prompt on stdin (summarize.py's caller). The run stops (exit 3) if `responseModel` is not `gpt-5.6-luna`. Transport errors back off (10 s doubling, 5 tries).
+- **Calls.** Through `pipeline/common/swarm_llm.py` (summarize.py's caller): `--endpoint <url> --model <id>` (or `SWARM_LLM_BASE_URL`, `SWARM_LLM_MODEL`, `SWARM_LLM_API_KEY`), `--prime-agent <path>`, or `--mock`. The prompt is the material, the task line follows it; `hooks`, `pairs` and `stage` ask an endpoint for JSON mode. The run stops (exit 3) if a reply names another model than the one asked for. Transport errors back off (10 s doubling, 5 tries). Records carry the model that wrote them.
 - **Cache.** Append-only JSONL in `book/`: `days.jsonl`, `chapters.jsonl`, `hooks.jsonl`, `pairs.jsonl`, `stage.jsonl`, `adherence.jsonl`, `adherence-null.jsonl`, `rewrites.jsonl`. A rerun does only what is missing; the last line per key wins. Before an append, a torn last line from a killed run is cut (or ended, when it is whole JSON). Dropped markers are counted with the same parser that drops them (`[2-5]` is four). Each line carries calls, tokens and seconds.
 
-## Run (Arch)
+## Run
 
 ```bash
-W=/home/lexi/calc-nvme/hackathon-20261004
-PY=$W/venv-bundle/bin/python
-cd /home/lexi/calc-nvme/wt/swarm-book/pipeline/book
-systemd-run --user --unit hk-book-days --collect -p Nice=15 -p WorkingDirectory=$PWD \
-  -p StandardOutput=append:$W/logs/book-days.log -p StandardError=append:$W/logs/book-days.log \
-  $PY book.py days --parallel 8 --prime-agent /home/lexi/.local/bin/prime-agent
-# the same with `adherence --parallel 4` (unit hk-book-adherence); after days: `gaps`, `chapters --parallel 8`, `hooks --parallel 8`, `pairs --parallel 8`, `stage --parallel 8`; then `rephrase`
-$PY book.py status                                          # counts of the cache
-$PY /home/lexi/calc-nvme/wt/swarm-book/pipeline/bundle/build_bundle.py   # emits book.json, pairs.json, adherence/, talk/
+export SWARM_WORK=$W                     # the work area: reads $W/bundle/data, writes $W/book
+export SWARM_LLM_BASE_URL=https://api.openai.com/v1 SWARM_LLM_MODEL=<model id> SWARM_LLM_API_KEY=<key>   # or --mock
+for s in days gaps chapters hooks pairs stage; do python3 book.py $s --parallel 8; done
+python3 book.py adherence --parallel 4
+python3 book.py rephrase                 # after the lists change too
+python3 book.py status                   # counts of the cache
+python3 ../bundle/build_bundle.py        # emits book.json, pairs.json, adherence/, talk/
 ```
 
-Flags: `--data` (default `$W/bundle/data`), `--book` (default `$W/book`), `--parallel 8`, `--limit N` (new units), `--thinking low`, `--timeout 300`, `--max-attempts 5`, `--content-attempts 2`. Python 3.12, stdlib only; it imports `pipeline/summarize/summarize.py` and `pipeline/bundle/build_bundle.py`.
+Flags: `--root` (default `$SWARM_WORK`), `--data` (default `<root>/bundle/data`), `--book` (default `<root>/book`), `--lists` (the redaction lists `rephrase` and `pairs` read; default `$SWARM_LISTS` or `<root>/meta`), `--parallel 8`, `--limit N` (new units), `--max-attempts 5`, `--content-attempts 3`, `--only`, `--chapter-prompt`, and the client flags `--mock`, `--endpoint`, `--model`, `--reasoning-effort`, `--prime-agent`, `--provider`, `--thinking`, `--timeout`. Python 3.12, stdlib only; it imports `pipeline/summarize/summarize.py`, `pipeline/bundle/build_bundle.py` and `pipeline/common/`. The real run went through prime-agent on Arch under `systemd-run`, one unit per step.
 
 ## Tests
 
-`python3 -m unittest discover -s pipeline/book/tests` runs every step on a tiny synthetic bundle with a fake prime-agent (a short batch retried, a broken batch never saved, an invented marker dropped, a model mismatch stopping the run, a rewording accepted only when it passes the redaction, a stage retried once and then null).
+`python3 -m unittest discover -s pipeline/book/tests` runs every step on a tiny synthetic bundle with a fake prime-agent (a short batch retried, a broken batch never saved, an invented marker dropped, a model mismatch stopping the run, a rewording accepted only when it passes the redaction, a stage retried once and then null, one pair sentence per talking pair) and the whole book once with `--mock`.
 
-Data: AI Digest / AI Village. Research use only; nothing from the dataset is committed here.
+Real run data: AI Digest / AI Village. Research use only; nothing from the dataset is committed here.

@@ -65,7 +65,9 @@ Data: **AI Digest / AI Village** (theaidigest.org/village; huggingface.co/datase
 
 ## Reproduce
 
-`pipeline/slice`, `pipeline/tag`, `pipeline/summarize`, `pipeline/book`, `pipeline/bundle`, `pipeline/pf`, `pipeline/serve` and `web/` each have a README with the exact commands. `docs/schema.md` is the data contract. `docs/charts/make_charts.py` redraws every chart from the public bundle. The tagger (oneiroNER) is our own model and is not part of this repo; `pipeline/tag/README.md` gives its input and output format.
+Run it on your own archive with the [swarm-reader skill](skills/swarm-reader/SKILL.md): `scripts/smoke.sh` runs the whole pipeline on an invented archive in about a minute, with no model and no key, and [RUNBOOK.md](skills/swarm-reader/RUNBOOK.md) takes any `archive.jsonl` of multi-agent messages to a served site with any OpenAI-compatible endpoint and a public CPU tagger (GLiNER and the NRC VAD Lexicon).
+
+`pipeline/slice`, `pipeline/tag`, `pipeline/summarize`, `pipeline/book`, `pipeline/bundle`, `pipeline/pf`, `pipeline/serve` and `web/` each have a README with the exact commands. `docs/schema.md` is the data contract. `docs/charts/make_charts.py` redraws every chart from the public bundle. Our own tagger (oneiroNER) is not part of this repo; `pipeline/tag/README.md` gives its input and output format and the public adapter that replaces it.
 
 ## Team
 

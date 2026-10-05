@@ -1,23 +1,33 @@
 # pipeline/bundle: the static data bundle
 
-`build_bundle.py` turns the pipeline's work area on Arch (`meta/`, `slice/`, `tags/`, `summaries/`) into the served bundle `bundle/data/` described in `docs/schema.md` section 4. `validate_bundle.py` checks a built bundle against that contract.
+`build_bundle.py` turns the pipeline's work area (`$SWARM_WORK` or `--root`: `meta/`, `slice/`, `tags/`, `summaries/`) into the served bundle `bundle/data/` described in `docs/schema.md` section 4. `validate_bundle.py` checks a built bundle against that contract.
 
-## Run (Arch)
+## Run
 
 ```bash
-W=/home/lexi/calc-nvme/hackathon-20261004
-B=/home/lexi/calc-nvme/wt/swarm-serve/pipeline/bundle
-$W/venv-bundle/bin/python $B/human_names.py      # once: meta/human_names.json (redaction list, never served)
-# once, after a build: meta/extra_human_ids.json (usernames and handles of humans; see "Extra human ids" below)
-$W/venv-bundle/bin/python $B/human_ids.py candidates --data $W/bundle/data   # or a scratch build with --top-entities 2600
-$W/venv-bundle/bin/python $B/human_ids.py classify --prime-agent /home/lexi/.local/bin/prime-agent
-$W/venv-bundle/bin/python $B/human_ids.py scan && $W/venv-bundle/bin/python $B/human_ids.py hits
-$W/venv-bundle/bin/python $B/human_ids.py write --review $W/human_ids/review.txt
-$W/venv-bundle/bin/python $B/build_bundle.py     # writes $W/bundle/data/ and $W/bundle/BUILD.json
-$W/venv-bundle/bin/python $B/validate_bundle.py  # checks $W/bundle/data/; exit 1 on any ERROR
+export SWARM_WORK=$W                                  # every script below defaults to it
+python3 human_names.py --archive $W/archive.jsonl     # the human name list (never served); see "The lists" below
+python3 build_bundle.py                               # writes $W/bundle/data/ and $W/bundle/BUILD.json
+python3 validate_bundle.py                            # checks $W/bundle/data/; exit 1 on any ERROR
+python3 human_ids.py candidates && python3 human_ids.py classify --mock    # or --endpoint/--prime-agent
+python3 human_ids.py scan && python3 human_ids.py hits                     # hits.json + review-template.txt
+python3 human_ids.py write --review $W/human_ids/review.txt                # a person decides every hit
 ```
 
-A rebuild is one command: about 30 seconds on the full slice without tags, about 5 minutes with tags and the identifier rules (validation included), under 1.3 GB of RAM. Each build writes an immutable generation `bundle/gen/<UTC stamp>-<pid>/`, validates it, and only then points `bundle/data` (a symlink) at it with one rename, so the served path always resolves to a complete, validated bundle. The previous generation is kept (roll back by pointing the link at it); older ones are removed. A build that fails validation exits 1, leaves the link unchanged and keeps the rejected build in `bundle/failed/` (`--no-validate` skips the check). A missing or unreadable `meta/human_names.json`, `meta/extra_human_ids.json`, `meta/extra_human_rules.json` or `meta/context_handles.json` stops the build before anything is written. Any input except `meta/` may be missing or partial (a file still being appended is fine): the matching parts are then empty but valid. Venv: `uv venv -p 3.12 venv-bundle && uv pip install -r requirements.txt` (`wordfreq` is required for the name rules below; `orjson` is optional, without it the stdlib `json` is used).
+A rebuild is one command: about 30 seconds on the full slice without tags, about 5 minutes with tags and the identifier rules (validation included), under 1.3 GB of RAM. Each build writes an immutable generation `bundle/gen/<UTC stamp>-<pid>/`, validates it, and only then points `bundle/data` (a symlink) at it with one rename, so the served path always resolves to a complete, validated bundle. The previous generation is kept (roll back by pointing the link at it); older ones are removed. A build that fails validation exits 1, leaves the link unchanged and keeps the rejected build in `bundle/failed/` (`--no-validate` skips the check). A missing list (`human_names.json`, `extra_human_ids.json`, `extra_human_rules.json`, `context_handles.json` in the lists dir) is created empty and named on stdout; an unreadable or malformed one stops the build before anything is written. Any input except `meta/` may be missing or partial (a file still being appended is fine): the matching parts are then empty but valid. Setup: `scripts/setup.sh` at the repo root, or `pip install -r requirements.txt` here (`wordfreq` is required for the name rules below; `orjson` is optional, without it the stdlib `json` is used).
+
+## The lists
+
+The redaction lists live in one directory: `--lists <dir>` on every script (or `$SWARM_LISTS`), by default `<root>/meta`. They are never served or committed.
+
+| list | written by | empty means |
+|---|---|---|
+| `human_names.json` | `human_names.py`: `--archive` (the `human_name` fields of an `archive.jsonl`), `--names` (a file, one name per line), `--dataset` (the AI Village tables) | no names to match |
+| `extra_human_ids.json` | `human_ids.py write` (replaces), `human_ids.py redteam` and `pf.py write` (add) | no handles beyond the rules |
+| `extra_human_rules.json` | `human_ids.py redteam` | no exact-case names, ids or per-location cuts |
+| `context_handles.json` | by hand | no word-handles |
+
+With every list empty the rules below still pool every human, cut emails (also percent-encoded or cut), `@handles` that are not an agent or a public account, phone numbers, order and tracking ids, uuids, profile accounts in URLs, long URL tokens, chess game ids, names in a salutation ("Dear X Y", "Hi X,"), names after a title ("Dr. X") and the non-agent PERSON spans of the tagger. They do not cut a name a human writes in plain prose ("I am Jo Bloggs", "ask jo about it") unless the tagger marks it PERSON (the `gliner_vad` adapter tags a name after "I am", "my name is", "call me" or "Dear" as PERSON), nor a bare username with no handle shape (`quill77` is cut only near a reader, viewer or customer word). A person reads the hits of `human_ids.py` and the red-team rows for those.
 
 ## Inputs
 
@@ -25,20 +35,23 @@ A rebuild is one command: about 30 seconds on the full slice without tags, about
 |---|---|
 | `meta/agents.json`, `rooms.json`, `days.json`, `village_goals.json`, `agent_goals.json` | agents, rooms, days, goals |
 | `meta/summaries_index.json` | type and day of each AI Digest summary (village summaries use `daily`) |
-| `meta/human_names.json` | human display names to redact (pipeline-internal; required) |
-| `meta/extra_human_ids.json` | usernames, handles and email-like ids of humans that are no display name (pipeline-internal; required, `[]` when none) |
-| `meta/context_handles.json` | handles of humans that are also English words, cut only in handle context (pipeline-internal; required, `[]` when none) |
-| `meta/extra_human_rules.json` | exact-case names, ids, per-location tokens, dropped entities, profile allowlist (pipeline-internal; required, `{}` when none) |
+| `<lists>/human_names.json` | human display names to redact (pipeline-internal; created empty when missing) |
+| `<lists>/extra_human_ids.json` | usernames, handles and email-like ids of humans that are no display name (pipeline-internal; `[]` when none) |
+| `<lists>/context_handles.json` | handles of humans that are also English words, cut only in handle context (pipeline-internal; `[]` when none) |
+| `<lists>/extra_human_rules.json` | exact-case names, ids, per-location tokens, dropped entities, profile allowlist (pipeline-internal; `{}` when none) |
+| `meta/dataset.json`, optional | the dataset name and credit line for the manifest (`from_jsonl.py` writes it; without it, AI Digest / AI Village) |
+| `questions/questions.json`, optional | the overseer answers from `docs/questions/make_questions.py`; written to `data/questions.json` |
 | `slice/slice-<kind>.jsonl` | counts, interactions, memory rows, quoted text (schema section 1) |
 | `tags/tags-<kind>.jsonl`, optional `tags/LABELS.json` | entities, mention series, mood, memory entity sets (section 2) |
 | `summaries/*.jsonl` | agent and room summaries (section 3) |
-| `tags/tags-summaries.jsonl`, optional | oneiroNER spans over summary `text` (same ids as the summaries); PERSON spans are redacted |
+| `tags/tags-summaries.jsonl`, optional | tagger spans over summary `text` (same ids as the summaries; `run_tagger.py --summaries`); PERSON spans are redacted |
+| `tags/STATUS.json`, optional | the tagger's display name for `manifest.tagger.name` (else oneiroNER) |
 | `findings/findings.json`, optional | cited findings (schema v1.2.4); written to `data/findings.json` |
 | `book/days.jsonl`, `chapters.jsonl`, `hooks.jsonl`, `pairs.jsonl`, `adherence.jsonl`, `rewrites.jsonl`, optional | the book's texts from `pipeline/book` (schema v1.3); written to `data/book.json` and `data/adherence/<agent>.json` |
 
 ## Outputs
 
-`bundle/data/` (served, schema v1.3): `bundle.json`, optional `findings.json`, optional `book.json` and `adherence/<agent>.json` (when `book/days.jsonl` exists), optional `pairs.json` (when `book/pairs.jsonl` exists too), `talk/<agent>.json`, `entities/<slug>.json`, `summaries/agent/<agent>.json`, `summaries/room/<room>.json`, `summaries/village/<day>.json`, `memory/<agent>.json`, `sources/<day>.json`. Caps (checked by the validator): `bundle.json` under 3 MB, any on-demand file under 2 MB, all of `data/` under 100 MB. Snippets are cut at 600 characters.
+`bundle/data/` (served, schema v1.3): `bundle.json`, optional `findings.json`, optional `questions.json`, optional `book.json` and `adherence/<agent>.json` (when `book/days.jsonl` exists), optional `pairs.json` (when `book/pairs.jsonl` exists too), `talk/<agent>.json`, `entities/<slug>.json`, `summaries/agent/<agent>.json`, `summaries/room/<room>.json`, `summaries/village/<day>.json`, `memory/<agent>.json`, `sources/<day>.json`. Caps (checked by the validator): `bundle.json` under 3 MB, any on-demand file under 2 MB, all of `data/` under 100 MB. Snippets are cut at 600 characters.
 `bundle/BUILD.json` (timings, counts, warnings) and `bundle/redaction_names.json` (the entries in use and the rows and summaries redacted without tags) stay beside `data/` and are never served.
 
 ## What the bundler decides
@@ -81,13 +94,13 @@ A rebuild is one command: about 30 seconds on the full slice without tags, about
 
 ## Extra human ids (`human_ids.py`)
 
-A person can appear by a username or handle that is no display name. `human_ids.py` finds them; everything it writes stays in `$W/human_ids/` and `meta/` on Arch and is never committed or served.
+A person can appear by a username or handle that is no display name. `human_ids.py` finds them; everything it writes stays in `$W/human_ids/` and the lists dir and is never committed or served.
 
 1. `candidates`: the entity surfaces of a built bundle (text, label, count, aliases, one example of up to 200 characters). Use a scratch build with `--top-entities 2600 --budget 9000000` so the entities that move up when some are dropped are covered too.
-2. `classify`: gpt-5.6-luna through prime-agent (`--provider cpa-r --no-tools`, items on stdin, batches of 100, stops if `responseModel` is not `gpt-5.6-luna`) marks each surface `human_individual` or `other`. Agent-name entities are not sent. A reply whose `n_items` is not the batch size, that is not valid JSON, or whose hits name no item of the batch is retried (`--attempts`, default 4) and never saved; a batch left without a complete reply makes the step exit 1. Runs resume: saved batches that are incomplete (from older runs) are sent again. A second run with `--thinking medium --work <dir>` can be merged with `hits --merge <dir>` (`hits` takes the union of every saved reply).
+2. `classify`: a model through `pipeline/common/swarm_llm.py` (`--endpoint`/`SWARM_LLM_*`, `--prime-agent`, or `--mock`, which marks every PERSON-labelled surface; items as material, batches of 100, stops if the reply names another model) marks each surface `human_individual` or `other`. Agent-name entities are not sent. A reply whose `n_items` is not the batch size, that is not valid JSON, or whose hits name no item of the batch is retried (`--attempts`, default 4) and never saved; a batch left without a complete reply makes the step exit 1. Runs resume: saved batches that are incomplete (from older runs) are sent again. A second run with `--thinking medium --work <dir>` can be merged with `hits --merge <dir>` (`hits` takes the union of every saved reply).
 3. `scan`: handle-shaped tokens (`@word`, `word-dev`, `word123`, `word_word`) near human words in served text.
-4. `hits`: one numbered list (`h<n>` classifier hits, `s<n>` scan candidates) for review.
-5. `write --review <file>`: one line per decision, `h<n> accept|reject <reason>`, or `+ accept <id> | <reason>` for an id found in review. Every classifier hit needs a verdict. Writes `meta/extra_human_ids.json`.
-6. `redteam --leaks <jsonl> --review <file>`: folds a privacy red-team's leak rows (`{file, ref_or_path, identifier, kind, context, confidence}`; high and medium) into `meta/extra_human_ids.json` and `meta/extra_human_rules.json`. By default a token is an any-case extra id (a URL gives its account, subdomain or personal-domain label; a phone or number gives an `ids` entry; an encoded email is left to its rule). The review file names the exceptions, one `<exact|cap|at|drop|reject> <identifier> | <reason>` per line; `--keep <file>` lists public figures to keep visible (written to the rule file's `keep`), `--add <id>` adds a reviewed id. Rows may give `$[...]` paths or RFC 6901 pointers. Profile accounts on the served bundle that the red-team did not flag go on `profile_allow`. Prints counts only.
+4. `hits`: one numbered list (`h<n>` classifier hits, `s<n>` scan candidates) for review, and `review-template.txt` beside it (one commented line of context and one `h<n> reject <reason>` line per hit, to edit). It refuses while classify has batches left, so "0 hits" never means "not checked" (`--allow-incomplete` lists the partial hits anyway).
+5. `write --review <file>` (default `$W/human_ids/review.txt`): one line per decision, `h<n> accept|reject <reason>`, or `+ accept <id> | <reason>` for an id found in review. Every classifier hit needs a verdict; when there are none, an empty file is the review. Writes (replaces) `<lists>/extra_human_ids.json`, so run it before `redteam` and `pf.py write`, which add to it.
+6. `redteam --leaks <jsonl> --review <file>`: folds a privacy red-team's leak rows into `<lists>/extra_human_ids.json` and `<lists>/extra_human_rules.json`. One JSON object per line: `{"file": "data/sources/12.json", "ref_or_path": "$[\"chat:abc\"][\"text\"]" or an RFC 6901 pointer, "identifier": "the exact string", "kind": "name|handle|email|url|phone|other", "context": "a few words around it", "confidence": "high|medium|low"}`; high and medium rows are used. The red-team prompt is in `skills/swarm-reader/SKILL.md` section 5. By default a token is an any-case extra id (a URL gives its account, subdomain or personal-domain label; a phone or number gives an `ids` entry; an encoded email is left to its rule). The review file names the exceptions, one `<exact|cap|at|drop|reject> <identifier> | <reason>` per line; `--keep <file>` lists public figures to keep visible (written to the rule file's `keep`), `--add <id>` adds a reviewed id. Rows may give `$[...]` paths or RFC 6901 pointers. Profile accounts on the served bundle that the red-team did not flag go on `profile_allow`. Prints counts only.
 
-Data: AI Digest / AI Village. Research use only.
+Real run data: AI Digest / AI Village. Research use only.

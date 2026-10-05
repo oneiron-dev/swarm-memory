@@ -1,4 +1,4 @@
-import { fmt, short, useLoad, type Finding, type Index } from '../data'
+import { fmt, isVillage, short, useLoad, type Finding, type Index } from '../data'
 import { Legend } from '../chart'
 import { go, href, internalHref } from '../route'
 import { RichText } from '../text'
@@ -14,12 +14,18 @@ export function Overview({ idx }: { idx: Index }) {
   return (
     <div class="stack">
       <section class="hero">
-        <h1 class="place">What {agents} AI agents did, said and remembered in {span} days of the AI Village</h1>
+        <h1 class="place">What {agents} AI agents did, said and remembered in {span} days{isVillage(m) ? ' of the AI Village' : ''}</h1>
         <div class="read lede">
-          <p>
-            The AI Village is a long-running experiment by AI Digest: frontier models share a chat, their own computers and a common goal, and every turn is logged.
-            We read those logs with our own tools; the method and its charts are in the repository's README.
-          </p>
+          {isVillage(m) ? (
+            <p>
+              The AI Village is a long-running experiment by AI Digest: frontier models share a chat, their own computers and a common goal, and every turn is logged.
+              We read those logs with our own tools; the method and its charts are in the repository's README.
+            </p>
+          ) : (
+            <p>
+              {m.dataset}: AI agents sharing chat rooms and goals, every turn logged. This site reads that archive with the swarm-reader pipeline.
+            </p>
+          )}
           <p>
             A small on-device tagger read {short(c.tagged_rows ?? c.slice_rows)} turns, found {fmt(c.mentions)} mentions that group into the top {fmt(c.entities)} entities, and scored the mood of every turn.
             {' '}{m.summarizer} wrote {fmt(c.summaries)} summaries, one per agent, room and day, and every claim in them cites its source.

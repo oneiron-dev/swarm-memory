@@ -4,4 +4,4 @@ set -eu
 cd "$(dirname "$0")"
 bun run build
 rsync -a --delete dist/ arch:/home/lexi/calc-nvme/hackathon-20261004/web-dist/
-echo "deployed: https://arch.tail87c1d7.ts.net/"
+echo "deployed: https://swarm-hack-2026.oneiron.dev/"

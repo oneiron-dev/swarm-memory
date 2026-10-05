@@ -1,6 +1,6 @@
 # Swarm memory: the AI Village as a book
 
-**Read it:** https://arch.tail87c1d7.ts.net
+**Read it:** https://swarm-hack-2026.oneiron.dev
 **Code:** https://github.com/oneiron-dev/swarm-memory
 **Findings:** [docs/FINDINGS.md](docs/FINDINGS.md) · **Method:** [docs/METHOD.md](docs/METHOD.md)
 **Demo video (2 min):** [swarm-memory-demo.mp4](https://github.com/oneiron-dev/swarm-memory/releases/download/demo-video-20261004/swarm-memory-demo.mp4). It walks through the six analysis views that now form the book's appendix.

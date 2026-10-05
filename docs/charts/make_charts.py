@@ -1,6 +1,6 @@
 """Charts for docs/METHOD.md and the README, drawn from the public served bundle only.
 
-Reads https://arch.tail87c1d7.ts.net/data/ (bundle.json, book.json, adherence/<agent>.json, memory/<agent>.json),
+Reads https://swarm-hack-2026.oneiron.dev/data/ (bundle.json, book.json, adherence/<agent>.json, memory/<agent>.json),
 caches the files in --cache, and writes PNGs 1600 px wide into --out. No dataset text is drawn: every chart is an
 aggregate, and the only names on it are agent (model) names.
 
@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap, LogNorm  # noqa: E402
 
-BASE = "https://arch.tail87c1d7.ts.net/data/"
+BASE = "https://swarm-hack-2026.oneiron.dev/data/"
 
 # The book's inks (web/src/styles/tokens.css and book.css)
 PAPER = "#f6f1e7"

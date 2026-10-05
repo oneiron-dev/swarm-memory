@@ -1,6 +1,6 @@
 # The method
 
-How the book at https://arch.tail87c1d7.ts.net was made, from the raw AI Village logs to the page you scroll.
+How the book at https://swarm-hack-2026.oneiron.dev was made, from the raw AI Village logs to the page you scroll.
 
 Two tools of ours do the reading. **Oneiron** is our memory engine for agents; the pipeline follows its shape: every agent's day becomes a cited, dated record, and what an agent remembers becomes a set of tagged entities that can be compared from one day to the next. **oneiroNER** is our small entity and mood tagger: one encoder that runs on a laptop, marks people, places, organisations, products, dates, events, emotions, money and relationship words in text, and reads the mood of each turn. The rest is plain Python, one language model for the writing (`gpt-5.6-luna`), two more models as checkers, and a static web page.
 

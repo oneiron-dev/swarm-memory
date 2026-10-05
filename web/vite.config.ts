@@ -37,7 +37,7 @@ export default defineConfig(({ mode }) => ({
           // the real bundle stays on Arch; dev proxies to it instead of copying it here
           proxy: {
             '/data': {
-              target: process.env.DATA_ORIGIN || 'https://arch.tail87c1d7.ts.net',
+              target: process.env.DATA_ORIGIN || 'https://swarm-hack-2026.oneiron.dev',
               changeOrigin: true,
               secure: true,
             },

@@ -5,6 +5,9 @@
                   Until --dist holds an index.html, a placeholder page with the bundle counts.
   /data/...    -> --data (the bundle; read-only; JSON gets Cache-Control: max-age=60; gzip when accepted)
   /api/health  -> {"ok", "generated", "counts", "dist"}; "ok" is true only when bundle.json has a manifest
+  --moved OLD-HOST=NEW-URL  (repeatable) answers every request that arrives for OLD-HOST (Host or X-Forwarded-Host,
+                  port ignored) with 301 to NEW-URL + the same path and query; browsers keep the #fragment, so hash
+                  routes survive. For a site that changed address after its link went out.
 
 Defaults: --data $SWARM_WORK/bundle/data and --dist $SWARM_WORK/web-dist (or --work <dir> for both).
 --check starts the server on a free port, fetches /api/health, / and /data/bundle.json, prints them and exits 0
@@ -80,7 +83,8 @@ class GzipCache:
 
 
 class App:
-    def __init__(self, data: str, dist: str):
+    def __init__(self, data: str, dist: str, moved: dict[str, str] | None = None):
+        self.moved = {k.lower(): v.rstrip("/") for k, v in (moved or {}).items()}
         self.data = os.path.abspath(data)
         self.dist = os.path.abspath(dist)
         self.gz = GzipCache()
@@ -155,6 +159,12 @@ class Handler(BaseHTTPRequestHandler):
     do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_POST
 
     def route(self, head: bool):
+        if self.app.moved:
+            host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "").split(",")[0].strip()
+            host = host.rsplit(":", 1)[0] if host.count(":") == 1 or host.startswith("[") and "]:" in host else host
+            new = self.app.moved.get(host.strip("[]").lower())
+            if new:
+                return self.moved_to(new + self.path, head)
         raw = urllib.parse.urlsplit(self.path).path
         try:
             path = urllib.parse.unquote(raw, errors="strict") if "%" in raw else raw
@@ -221,6 +231,17 @@ class Handler(BaseHTTPRequestHandler):
                 body = f.read()
         self.send_bytes(body, ctype, head, cache=cache, gz=gz, last_mod=last_mod, vary=ext in COMPRESSIBLE)
 
+    def moved_to(self, url: str, head: bool):
+        body = f"Moved to {url}\n".encode()
+        self.send_response(HTTPStatus.MOVED_PERMANENTLY)
+        self.send_header("Location", url)
+        self.send_header("Content-Type", TYPES[".txt"])
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        if not head:
+            self.wfile.write(body)
+
     def send_bytes(self, body: bytes, ctype: str, head: bool, cache: str, gz: bool = False,
                    last_mod: str | None = None, vary: bool = False):
         self.send_response(HTTPStatus.OK)
@@ -240,8 +261,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
-def make_server(host: str, port: int, data: str, dist: str) -> ThreadingHTTPServer:
-    handler = type("BoundHandler", (Handler,), {"app": App(data, dist)})
+def make_server(host: str, port: int, data: str, dist: str, moved: dict[str, str] | None = None) -> ThreadingHTTPServer:
+    handler = type("BoundHandler", (Handler,), {"app": App(data, dist, moved)})
     srv = ThreadingHTTPServer((host, port), handler)
     srv.daemon_threads = True
     return srv
@@ -285,15 +306,24 @@ def main(argv=None):
     ap.add_argument("--data", help="the bundle (default <work>/bundle/data)")
     ap.add_argument("--dist", help="the built web app (default <work>/web-dist)")
     ap.add_argument("--check", action="store_true", help="serve on a free port, check health, / and the bundle, exit")
+    ap.add_argument("--moved", action="append", default=[], metavar="OLD-HOST=NEW-URL",
+                    help="301 every request for OLD-HOST to NEW-URL + path (repeatable)")
     args = ap.parse_args(argv)
+    moved = {}
+    for item in args.moved:
+        old, sep, new = item.partition("=")
+        if not sep or not old.strip() or not new.startswith(("http://", "https://")):
+            raise SystemExit(f"serve: --moved wants OLD-HOST=https://new.example, got {item!r}")
+        moved[old.strip()] = new.strip()
     if not (args.data and args.dist) and not args.work:
         raise SystemExit("serve: set SWARM_WORK=<work area> or pass --work, or both --data and --dist")
     args.data = args.data or os.path.join(args.work, "bundle", "data")
     args.dist = args.dist or os.path.join(args.work, "web-dist")
     if args.check:
         return check(args.data, args.dist, args.host)
-    srv = make_server(args.host, args.port, args.data, args.dist)
-    print(f"serving http://{args.host}:{args.port}/  data={args.data}  dist={args.dist}", flush=True)
+    srv = make_server(args.host, args.port, args.data, args.dist, moved)
+    print(f"serving http://{args.host}:{args.port}/  data={args.data}  dist={args.dist}"
+          + "".join(f"  moved {k} -> {v}" for k, v in moved.items()), flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

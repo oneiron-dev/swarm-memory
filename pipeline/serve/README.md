@@ -10,13 +10,14 @@ python3 pipeline/serve/serve.py             # http://127.0.0.1:8790/
 
 `/api/health` answers 200 even with no bundle; look at its body: `"ok": true` only when `bundle.json` has a manifest, and `"dist": true` only when the app is built. `--check` checks both.
 
-Our own deployment (below) published it by Tailscale Funnel at https://arch.tail87c1d7.ts.net.
+Our own deployment (below) is public at https://swarm-hack-2026.oneiron.dev through a Cloudflare Tunnel. The address it first went out under, a Tailscale Funnel name, still answers: `--moved OLD-HOST=NEW-URL` turns every request for the old name into a 301 to the new one (same path and query; browsers keep the `#` route).
 
 | path | serves |
 |---|---|
 | `/` | `web-dist/` (the built frontend). A path without a file extension that is not a file falls back to `index.html`. `/assets/*` is cached for a year (Vite hashes the names); everything else is `no-cache`. Until `web-dist/index.html` exists, `/` is a placeholder page with the bundle counts and the manifest's credit line. |
 | `/data/...` | `bundle/data/`, read-only. JSON gets `Cache-Control: public, max-age=60`. Responses are gzipped when the client accepts gzip. |
 | `/api/health` | `{"ok", "generated", "counts", "dist"}` from `bundle.json`'s manifest. |
+| any path, when the request's `Host` (or `X-Forwarded-Host`) is a `--moved` name | `301` to the new address + path + query. |
 
 Only GET and HEAD. Paths are decoded, normalised and resolved, symlinks included, and must stay inside their folder; the check runs on the final path of every read, including a directory's `index.html`, the SPA fallback and the manifest behind `/api/health`. Anything else returns 404 (tested in `tests/test_serve.py`).
 
@@ -47,18 +48,26 @@ rsync -a --delete <checkout>/web/dist/ /home/lexi/calc-nvme/hackathon-20261004/w
 curl -s http://127.0.0.1:8790/api/health
 ```
 
-## Funnel
+## Public address (our deployment)
+
+Two front doors, both ending at `127.0.0.1:8790`:
+
+1. **Cloudflare Tunnel** `swarm-hack-2026` → https://swarm-hack-2026.oneiron.dev (DNS: a proxied CNAME to `<tunnel-id>.cfargotunnel.com` in the oneiron.dev zone; ingress set on the Cloudflare side). On Arch it runs as the user unit `~/.config/systemd/user/cloudflared-swarm.service`: `cloudflared tunnel --no-autoupdate run --token-file ~/.cloudflared/swarm-hack-2026.token` (the token file is mode 600 and never leaves the machine).
+2. **Tailscale Funnel** https://arch.tail87c1d7.ts.net, the address the submission form carries. `hk-serve.service` passes `--moved arch.tail87c1d7.ts.net=https://swarm-hack-2026.oneiron.dev`, so this name only redirects.
 
 ```bash
-tailscale funnel --bg 8790                         # on: https://arch.tail87c1d7.ts.net
-tailscale funnel status
-tailscale funnel --https=443 off; tailscale serve reset   # off
+systemctl --user status cloudflared-swarm hk-serve          # both active
+journalctl --user -u cloudflared-swarm -n 20                 # "Registered tunnel connection" x4
+curl -sI https://arch.tail87c1d7.ts.net/ | grep -i location  # the redirect
+curl -s https://swarm-hack-2026.oneiron.dev/api/health       # the site
+# taking it down (after the results): stop the tunnel, then the Funnel
+systemctl --user disable --now cloudflared-swarm
+tailscale funnel --https=443 off; tailscale serve reset
 ```
 
-Public check from outside the tailnet's DNS:
-`curl --resolve arch.tail87c1d7.ts.net:443:$(dig +short @1.1.1.1 arch.tail87c1d7.ts.net | head -1) https://arch.tail87c1d7.ts.net/api/health`
+Setting the Funnel up from nothing: `tailscale funnel --bg 8790`; `tailscale funnel status` shows it.
 
-Only the derived bundle and the app are behind Funnel. The dataset and the pipeline work area are never served.
+Only the derived bundle and the app are behind either door. The dataset and the pipeline work area are never served.
 
 ## Tests
 

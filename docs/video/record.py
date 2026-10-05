@@ -27,7 +27,7 @@ from pathlib import Path
 
 from playwright.async_api import Page, async_playwright
 
-BASE = 'https://arch.tail87c1d7.ts.net/'
+BASE = 'https://swarm-hack-2026.oneiron.dev/'
 
 # The browser renders at 1536x776 CSS px with a 1.25 device scale: 1920x970 frames, readable at
 # 1080p. The caption band takes the last 110 px of the 1080 frame.
@@ -362,7 +362,7 @@ OUTRO_JS = r"""
       <dl style="display: grid; grid-template-columns: max-content 1fr; gap: 14px 28px; margin-top: 34px; font: 400 21px/1.3 var(--mono); color: var(--ink-1)">
         <dt style="color: var(--ink-3)">Data</dt><dd>AI Digest / AI Village</dd>
         <dt style="color: var(--ink-3)">Code</dt><dd>github.com/oneiron-dev/swarm-memory</dd>
-        <dt style="color: var(--ink-3)">Live</dt><dd>arch.tail87c1d7.ts.net</dd>
+        <dt style="color: var(--ink-3)">Live</dt><dd>swarm-hack-2026.oneiron.dev</dd>
       </dl>
     </div>`;
   card.style.cssText = 'position: fixed; inset: 0; display: grid; place-items: center; z-index: 50; opacity: 0; transition: opacity .9s ease .4s';

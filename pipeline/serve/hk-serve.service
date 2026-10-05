@@ -1,9 +1,9 @@
 [Unit]
-Description=Swarm hackathon server: web-dist and bundle/data on 127.0.0.1:8790 (behind Tailscale Funnel)
+Description=Swarm hackathon server: web-dist and bundle/data on 127.0.0.1:8790 (behind the Cloudflare Tunnel; the old Funnel name redirects)
 After=network-online.target
 
 [Service]
-ExecStart=/home/lexi/calc-nvme/hackathon-20261004/venv-bundle/bin/python /home/lexi/calc-nvme/wt/swarm-serve/pipeline/serve/serve.py --host 127.0.0.1 --port 8790 --data /home/lexi/calc-nvme/hackathon-20261004/bundle/data --dist /home/lexi/calc-nvme/hackathon-20261004/web-dist
+ExecStart=/home/lexi/calc-nvme/hackathon-20261004/venv-bundle/bin/python /home/lexi/calc-nvme/wt/swarm-serve/pipeline/serve/serve.py --host 127.0.0.1 --port 8790 --data /home/lexi/calc-nvme/hackathon-20261004/bundle/data --dist /home/lexi/calc-nvme/hackathon-20261004/web-dist --moved arch.tail87c1d7.ts.net=https://swarm-hack-2026.oneiron.dev
 WorkingDirectory=/home/lexi/calc-nvme/hackathon-20261004
 Restart=always
 RestartSec=2

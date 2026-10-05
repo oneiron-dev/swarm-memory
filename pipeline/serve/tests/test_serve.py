@@ -254,3 +254,70 @@ class Check(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Moved(unittest.TestCase):
+    """--moved OLD-HOST=NEW-URL: requests that arrive for the old name get a 301 to the new one, same path and query."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.data = os.path.join(cls.tmp, "bundle", "data")
+        cls.dist = os.path.join(cls.tmp, "web-dist")
+        os.makedirs(cls.data)
+        os.makedirs(cls.dist)
+        with open(os.path.join(cls.data, "bundle.json"), "w") as f:
+            json.dump({"manifest": MANIFEST}, f)
+        with open(os.path.join(cls.dist, "index.html"), "w") as f:
+            f.write("<!doctype html><title>app</title>")
+        cls.srv = serve.make_server("127.0.0.1", 0, cls.data, cls.dist, moved={"Old.Example": "https://new.example/"})
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        shutil.rmtree(cls.tmp)
+
+    def get(self, path, host, method="GET", forwarded=None):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+        c.putheader("Host", host)
+        if forwarded:
+            c.putheader("X-Forwarded-Host", forwarded)
+        c.endheaders()
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        return r.status, dict(r.getheaders()), body
+
+    def test_old_host_is_redirected_with_path_and_query(self):
+        status, h, body = self.get("/some/route?day=3", "old.example")
+        self.assertEqual(status, 301)
+        self.assertEqual(h["Location"], "https://new.example/some/route?day=3")
+        self.assertIn(b"https://new.example/some/route?day=3", body)
+        self.assertEqual(h["Cache-Control"], "public, max-age=3600")
+
+    def test_port_and_case_are_ignored(self):
+        self.assertEqual(self.get("/", "OLD.example:443")[1]["Location"], "https://new.example/")
+        self.assertEqual(self.get("/api/health", "old.example:8790")[0], 301)
+
+    def test_forwarded_host_counts(self):
+        status, h, _ = self.get("/data/bundle.json", f"127.0.0.1:{self.port}", forwarded="old.example")
+        self.assertEqual((status, h["Location"]), (301, "https://new.example/data/bundle.json"))
+
+    def test_other_hosts_are_served(self):
+        status, h, body = self.get("/api/health", f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+        self.assertEqual(self.get("/", "new.example")[0], 200)
+
+    def test_head(self):
+        status, h, body = self.get("/x", "old.example", method="HEAD")
+        self.assertEqual((status, h["Location"], body), (301, "https://new.example/x", b""))
+
+    def test_cli_rejects_a_bad_value(self):
+        for bad in ("nope", "old.example=new.example", "=https://new.example"):
+            with self.assertRaises(SystemExit):
+                serve.main(["--data", self.data, "--dist", self.dist, "--moved", bad])

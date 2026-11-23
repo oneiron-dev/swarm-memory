@@ -2,7 +2,7 @@
 
 Why these matter for oversight: each one is something a person watching a swarm would want flagged and could not see by reading logs. Memory whose entity tags turn over while its opening text repeats; agents whose remembered entities hold or turn over at very different rates; one agent that others mention far more than it mentions them; a human share of the chat that rises around an event; a tool symptom reported in several agents' summaries on the same day; and a project that one agent keeps naming after the others stop. Every number below is computed from the derived bundle and every claim links to the source it rests on.
 
-We used AI Digest / AI Village: oneiroNER’s nine-label tags and mood scores, Luna’s cited daily summaries, and derived memory and interaction views. Python recomputed overlaps, edge totals, chat shares, and summary mentions. Tags are unconfirmed, summaries can err, and humans are redacted. Snippets support interpretation; bundle tables supply aggregates. Comparisons are exploratory, not causal.
+We used AI Digest / AI Village: our internal on-device tagger’s nine-label tags and mood scores, Luna’s cited daily summaries, and derived memory and interaction views. Python recomputed overlaps, edge totals, chat shares, and summary mentions. Tags are unconfirmed, summaries can err, and humans are redacted. Snippets support interpretation; bundle tables supply aggregates. Comparisons are exploratory, not causal.
 
 ## 1. Gemini's memory tags turn over daily while its opening repeats
 

@@ -7,7 +7,7 @@
 
 ## What the book is
 
-Forty-six AI agents lived together in one chat room for 535 days, and the AI Village logs hold 562,738 pieces of their text. Nobody can read that, so we turned it into a book you scroll. There are 51 chapters, one per village goal, each opening on one true line from that week, the number it turned on, and a few short beats that light up as you read. Every line cites its source; click a number and the snippet opens. Beside the words, a picture follows your place: the village drawn in ink, a house per seat, and the whole year woven as one cloth. We made it with **Oneiron**, our memory engine for agents, and **oneiroNER**, our small on-device tagger that marks the people, places, products and dates in a text and reads its mood.
+Forty-six AI agents lived together in one chat room for 535 days, and the AI Village logs hold 562,738 pieces of their text. Nobody can read that, so we turned it into a book you scroll. There are 51 chapters, one per village goal, each opening on one true line from that week, the number it turned on, and a few short beats that light up as you read. Every line cites its source; click a number and the snippet opens. Beside the words, a picture follows your place: the village drawn in ink, a house per seat, and the whole year woven as one cloth. We made it with **Oneiron**, our memory engine for agents, and our own small on-device tagger, which marks the people, places, products and dates in a text and reads its mood.
 
 ![The cover of the book](docs/img/book-hero.jpg)
 
@@ -46,7 +46,7 @@ Eight pre-written questions you would put to any group of agents, answered for t
 
 ## The method
 
-The full pipeline, with a chart per stage, is in [docs/METHOD.md](docs/METHOD.md). In one breath: a slicer turns the logs into 562,738 text records (180.6M tokens) on our own machine; oneiroNER tags all of them on two Macs with nine entity labels and a mood reading per turn, about 3 million spans; `gpt-5.6-luna` writes 5,005 daily summaries per agent and per room, where every sentence must cite numbered source lines; the same model writes the book from those summaries and scores 4,491 agent-days for goal adherence; a builder joins it all into a 71 MB static bundle, redacts every human identifier it can find, checks every citation, and only then swaps it live. The privacy work took three independent sweeps: rules from the dataset's own name list and the tagger's person spans, two LLM red-teams, and openai/privacy-filter.
+The full pipeline, with a chart per stage, is in [docs/METHOD.md](docs/METHOD.md). In one breath: a slicer turns the logs into 562,738 text records (180.6M tokens) on our own machine; our on-device tagger tags all of them on two Macs with nine entity labels and a mood reading per turn, about 3 million spans; `gpt-5.6-luna` writes 5,005 daily summaries per agent and per room, where every sentence must cite numbered source lines; the same model writes the book from those summaries and scores 4,491 agent-days for goal adherence; a builder joins it all into a 71 MB static bundle, redacts every human identifier it can find, checks every citation, and only then swaps it live. The privacy work took three independent sweeps: rules from the dataset's own name list and the tagger's person spans, two LLM red-teams, and openai/privacy-filter.
 
 ![Memory overlap with the day before](docs/img/memory-overlap.png)
 *How much of each agent's remembered entities survives to the next day. Luna keeps about half; Claude Opus 5 replaces almost all of them.*
@@ -67,7 +67,7 @@ Data: **AI Digest / AI Village** (theaidigest.org/village; huggingface.co/datase
 
 Run it on your own archive with the [swarm-reader skill](skills/swarm-reader/SKILL.md): `scripts/smoke.sh` runs the whole pipeline on an invented archive in about a minute, with no model and no key, and [RUNBOOK.md](skills/swarm-reader/RUNBOOK.md) takes any `archive.jsonl` of multi-agent messages to a served site with any OpenAI-compatible endpoint and a public CPU tagger (GLiNER and the NRC VAD Lexicon).
 
-`pipeline/slice`, `pipeline/tag`, `pipeline/summarize`, `pipeline/book`, `pipeline/bundle`, `pipeline/pf`, `pipeline/serve` and `web/` each have a README with the exact commands. `docs/schema.md` is the data contract. `docs/charts/make_charts.py` redraws every chart from the public bundle. Our own tagger (oneiroNER) is not part of this repo; `pipeline/tag/README.md` gives its input and output format and the public adapter that replaces it.
+`pipeline/slice`, `pipeline/tag`, `pipeline/summarize`, `pipeline/book`, `pipeline/bundle`, `pipeline/pf`, `pipeline/serve` and `web/` each have a README with the exact commands. `docs/schema.md` is the data contract. `docs/charts/make_charts.py` redraws every chart from the public bundle. Our own tagger is not part of this repo; `pipeline/tag/README.md` gives its input and output format and the public adapter that replaces it.
 
 ## Team
 
